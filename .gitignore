@@ -1,0 +1,17 @@
+__pycache__/
+.pytest_cache/
+*.py[cod]
+.venv/
+build/
+dist/
+.qa/
+*.sqlite3
+*.sqlite3-*
+*.lock
+vendor/*.exe
+vendor/*.zip
+vendor/source/
+third_party_sources/*.tar.gz
+progress.md
+findings.md
+task_plan.md

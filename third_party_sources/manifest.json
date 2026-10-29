@@ -1,0 +1,17 @@
+{
+  "mihomo-v1.19.33-source.tar.gz": {
+    "url": "https://codeload.github.com/MetaCubeX/mihomo/tar.gz/refs/tags/v1.19.33",
+    "sha256": "e7c596b37ff27ec487d19b1920f73e0c97a78067ea35766530ee9659ade72711",
+    "bytes": 1282993
+  },
+  "mihomo-v1.19.33-vendor.tar.gz": {
+    "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/vendor.tar.gz",
+    "sha256": "7ac4d4da0e6a29ef6ed18d2cf8f4c58d361d049ae364fd841acc883aa3a9e1cc",
+    "bytes": 17619729
+  },
+  "mihomo-v1.19.33-toolchain.tar.gz": {
+    "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/toolchain.tar.gz",
+    "sha256": "a827640a1ae37475583ed82eb762ed563d40a4eeb83461acfb5ee8ff10fe4a55",
+    "bytes": 67776147
+  }
+}
