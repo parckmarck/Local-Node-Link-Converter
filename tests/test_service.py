@@ -89,6 +89,19 @@ def test_v2ray_subscription_and_names(service):
     assert {parse_uri(uri)["name"] for uri in uris} == {"Alpha", "Beta"}
 
 
+def test_sing_box_subscription(service):
+    add_nodes(service)
+    status, headers, body = request(service, target(service, "singbox"))
+    assert status == 200
+    assert headers["Content-Type"].startswith("application/json")
+    data = json.loads(body)
+    assert data["route"]["final"] == "PROXY"
+    assert len([entry for entry in data["outbounds"] if entry["type"] == "socks"]) == 2
+    assert [entry["tag"] for entry in data["outbounds"]][-3:] == ["PROXY", "AUTO", "DIRECT"]
+    tags = {entry["tag"] for entry in data["outbounds"]}
+    assert {"Alpha", "Beta"} <= tags
+
+
 def test_disabled_and_group_filtering(service):
     add_nodes(service)
     beta = next(node for node in service.store.list_nodes() if node["name"] == "Beta")

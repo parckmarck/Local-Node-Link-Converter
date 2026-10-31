@@ -7,14 +7,14 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QStyle, QStyledItemDelegate
 
-from .messages import test_message
+from .messages import display_test_message
 from .theme import ACCENT, AMBER, BLUE, GREEN, INK, MUTED, RED, icon
 
 NODE_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 SORT_ROLE = int(Qt.ItemDataRole.UserRole) + 2
 
 
-def test_state(node: dict, testing=False) -> tuple[str, str, str, int | None]:
+def node_test_state(node: dict, testing=False) -> tuple[str, str, str, int | None]:
     if testing:
         return "测试中", BLUE, "testing", None
     tests = node.get("tests", {})
@@ -74,7 +74,7 @@ class NodeModel(QAbstractTableModel):
         if not index.isValid() or index.row() >= len(self.nodes):
             return None
         node, column = self.nodes[index.row()], index.column()
-        state, color, status, delay = test_state(node, node["id"] in self.testing)
+        state, color, status, delay = node_test_state(node, node["id"] in self.testing)
         if role == NODE_ROLE:
             return node
         if role == Qt.ItemDataRole.CheckStateRole and column == 0:
@@ -88,7 +88,7 @@ class NodeModel(QAbstractTableModel):
                 return node["group"] or "未分组"
             if column in (4, 5):
                 latest = node.get("tests", {}).get("proxy") or node.get("tests", {}).get("tcp")
-                return test_message((latest or {}).get("message", "尚无测试结果"))
+                return display_test_message((latest or {}).get("message", "尚无测试结果"))
             if column == 6:
                 return "从订阅中移除" if node["enabled"] else "加入订阅"
         if role in (Qt.ItemDataRole.DisplayRole, SORT_ROLE):
@@ -159,7 +159,7 @@ class NodeFilter(QSortFilterProxyModel):
             return False
         if self.group is not None and self.group != node["group"]:
             return False
-        state = test_state(node)[2]
+        state = node_test_state(node)[2]
         return not self.status or (
             (self.status == "untested" and not proxy_tested(node))
             or (self.status == "ok" and state == "ok")

@@ -205,6 +205,39 @@ v2rayN output is Base64 of UTF-8, newline-separated canonical share URLs,
 without a trailing newline. VMess names are rewritten inside JSON and other
 names in URI fragments. Empty input yields an empty Base64 string.
 
+## sing-box Export (added in 1.6.0)
+
+`export_singbox(nodes, test_url, rules)` produces a complete sing-box JSON
+profile targeting the stable configuration format of sing-box 1.12–1.14
+(current stable 1.14.4 at research time). The 1.13.0 removals (legacy
+`block`/`dns` special outbounds, legacy WireGuard outbound) and the 1.14.0
+removal (legacy DNS server formats) are avoided by emitting only current
+syntax; clients older than 1.11 are not targeted. Export only: NodeDesk never
+parses sing-box profiles.
+
+Structure: loopback-only `mixed` inbound on 127.0.0.1:7890; DNS with a remote
+DoH server detoured through PROXY and a local UDP server detoured through
+DIRECT (`final: remote`), plus `route.default_domain_resolver` pointing at the
+local server so proxy-server domains never resolve through the proxy; node
+outbounds plus selector `PROXY` (default `AUTO`), urltest `AUTO`, and
+`direct`. Subscription rules are converted in display order with the current
+action syntax (`action: route`/`reject`, `final: PROXY`); GEOIP/GEOSITE rules
+reference remote binary rule sets from SagerNet/sing-geoip and
+SagerNet/sing-geosite, downloaded by the client with `download_detour:
+PROXY`. `no_resolve` hints are dropped: sing-box matches IP rules against the
+actual destination without forcing resolution. WireGuard nodes are emitted as
+top-level `endpoints` entries (`allowed_ips` derived from the interface
+address families). Xray custom VLESS/VMess IDs (≤30 bytes) are mapped to
+their UUIDv5 form with a nil namespace (XTLS/Xray-core issue #158) because
+sing-box parses strict UUIDs; the `?ed=` WebSocket convention becomes
+`max_early_data` with `early_data_header_name: Sec-WebSocket-Protocol`.
+
+Intentional whole-export errors: Hysteria v1, Mieru, and SSR are not
+implemented by current sing-box (SSR remains a parse-only stub that aborts
+startup); Trojan-Go `encryption=ss` has no sing-box field; Hysteria2
+`pinSHA256` pins a certificate fingerprint while sing-box pins public-key
+hashes, so dropping it would silently weaken TLS verification.
+
 ## Licensing and Verification
 
 No upstream formatter or protocol-engine source was copied. GPL projects are

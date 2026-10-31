@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from .formats import MAX_BATCH_LENGTH, FormatError, parse_batch, parse_uri
-from .messages import format_message, local_stamp, test_message
+from .messages import display_test_message, format_message, local_stamp
 from .rules import NO_RESOLVE_TYPES, RULE_ACTIONS, RULE_HINTS, RULE_TYPES, RuleError, render_rule, validate_rule
 from .theme import GREEN, MUTED, RED
 from .widgets import button, divider, icon_button, label
@@ -425,7 +425,7 @@ class TestDetailDialog(QDialog):
         for row, item in enumerate(items):
             status = item.get("status")
             delay = item.get("latency_ms")
-            message = test_message(item.get("message", ""))
+            message = display_test_message(item.get("message", ""))
             values = [
                 str(item.get("name", "")), labels.get(status, "未知"),
                 f"{delay} ms" if delay is not None else "-",

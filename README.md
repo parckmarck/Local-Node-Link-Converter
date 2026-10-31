@@ -1,7 +1,7 @@
 # Node Desk · 节点维护
 
 一个按需启动的 Windows 桌面程序。节点保存在本机，用于管理分享链接，
-生成本地 Clash Verge / v2rayN 订阅，并执行连接测试。
+生成本地 Clash Verge / v2rayN / sing-box 订阅，并执行连接测试。
 
 ## 直接运行
 
@@ -23,12 +23,14 @@
 2. 在节点列表中搜索、分组、修改名称和链接。重复节点会自动跳过。
    “订阅”开关只决定是否加入输出，不会删除节点。
 3. 打开“本地订阅”，按需要选择分组，复制对应客户端的链接。
-4. （可选）打开“订阅规则”，检查随 Clash 订阅一起下发的流量规则。默认包含
+4. （可选）打开“订阅规则”，检查随订阅一起下发的流量规则。默认包含
    局域网直连、广告拦截、国内直连，以及 Telegram、常见流媒体的分流；可以在这里
-   增删规则、调整顺序和启用状态，客户端刷新订阅后生效（v2rayN 为纯节点列表，不含规则）。
+   增删规则、调整顺序和启用状态，客户端刷新订阅后生效（Clash 与 sing-box 订阅
+   会带上规则；v2rayN 为纯节点列表，不含规则）。
 5. 在 Clash Verge 的订阅页添加远程订阅，粘贴 Clash 地址后导入。
    在 v2rayN 的订阅分组设置中添加 v2rayN 地址，再执行“不通过代理”更新订阅。
-   客户端的菜单名称可能随版本不同。
+   sing-box 客户端可导入“导出文件”得到的完整 JSON 配置（或粘贴 sing-box 订阅
+   地址的客户端版本）。客户端的菜单名称可能随版本不同。
 6. 维护完毕关闭窗口或点击“退出程序”。下次刷新订阅前再打开程序。
 
 **不需要一直运行。** 客户端已导入的节点保存在客户端中，关闭本程序不影响
@@ -64,6 +66,15 @@ v2rayN 输出为 Base64 节点列表；SOCKS5 转为客户端识别的 `socks://
 v2rayN 订阅只能包含它能表达的协议（VLESS、VMess、Trojan、Shadowsocks、SSR、SOCKS5、HTTP、
 Hysteria2、TUIC、AnyTLS、WireGuard）；启用了 Hysteria v1、Mieru、Trojan-Go 或 SSH 节点时，
 v2rayN 订阅会明确报错，请改用 Clash 订阅，或在节点列表里关闭这些节点的"订阅"开关。
+
+sing-box 输出是完整 JSON 配置（按 sing-box 1.12–1.14 现行语法）：本地
+`127.0.0.1:7890` 混合入站、DNS（境外 DoH 走代理、代理服务器域名走本地解析）、
+订阅规则转换为路由规则（GeoSite / GeoIP 转为远程二进制 rule_set，由客户端自动
+下载）、手动选择 PROXY、自动测速 AUTO 与 DIRECT 兜底；WireGuard 节点以
+`endpoints` 表达。sing-box 未实现的 Hysteria v1、Mieru、SSR（新版内核已移除
+实现）、Trojan-Go 的 `ss;加密;密码` 加密层和 Hysteria2 的 pinSHA256 证书固定
+无法转换，启用这些节点时 sing-box 订阅会明确报错，请改用 Clash 订阅，或在节点
+列表里关闭它们的“订阅”开关。
 不同客户端不能完整表达的配置会明确报错，不会悄悄省略安全或传输参数。
 
 当前未覆盖：Snell、XHTTP、KCP、部分旧 VMess 分享格式、新式 VLESS 加密、
@@ -74,13 +85,15 @@ HTTP 伪装的 host 可省略，省略时使用 Mihomo 的默认值（以服务�
 
 ## 订阅规则
 
-Clash 订阅会带上“订阅规则”页面里管理的规则，按列表顺序写入 `rules:`，
-最先匹配的生效；最后的兜底规则固定为“其余流量 → 走代理 (PROXY)”，不可删除。
+Clash 与 sing-box 订阅会带上“订阅规则”页面里管理的规则，按列表顺序写入，
+最先匹配的生效；最后的兜底规则固定为“其余流量 → 走代理 (PROXY)”，不可删除
+（sing-box 中体现为路由规则与 `final: PROXY`）。
 
 默认规则覆盖：局域网与私有地址直连、广告及跟踪域名拦截（`GEOSITE,category-ads-all`）、
 中国大陆流量直连（`GEOSITE,cn` + `GEOIP,CN`）、Telegram 与常见流媒体走代理。
 其中 GeoSite / GeoIP 数据由客户端提供，Clash Verge、Mihomo Party 等主流客户端
-会自动下载。规则可在界面中添加、编辑、启用、停用、排序或删除；
+会自动下载；sing-box 会按配置里的地址下载对应的 rule_set。
+规则可在界面中添加、编辑、启用、停用、排序或删除；
 误删后可用“恢复默认规则”一键还原，“导出备份”会一并保存规则。
 
 ## 可用性测试
@@ -132,6 +145,7 @@ Clash 订阅会带上“订阅规则”页面里管理的规则，按列表顺�
 main.py                   Windows 入口与单实例锁
 node_desk/formats.py       分享格式解析与订阅输出
 node_desk/rules.py         订阅规则模型与默认规则
+node_desk/singbox.py       sing-box 配置导出
 node_desk/store.py         节点、设置、规则与备份
 node_desk/security.py      Windows DPAPI
 node_desk/service.py       本地只读订阅 HTTP 服务
@@ -194,7 +208,8 @@ python scripts\build_windows.py     # 或直接双击项目根目录的「重新
 
 没有提供真实远程节点，所以不承诺你的节点均可用。
 Clash 配置通过真实内核验证；v2rayN 格式根据上游导入实现及往返测试验证，
-未改动已安装客户端的配置来试导入。
+未改动已安装客户端的配置来试导入。sing-box 输出依据官方配置文档
+（1.12–1.14 语法）与单元测试核对，本机未运行 sing-box 试导入。
 
 ## 开源依赖
 

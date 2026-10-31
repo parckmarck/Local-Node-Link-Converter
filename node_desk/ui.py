@@ -18,12 +18,13 @@ from PySide6.QtWidgets import (
 from . import __version__
 from .dialogs import EditDialog, ImportDialog, PreviewDialog, RuleDialog, TestDetailDialog, confirm, error_dialog
 from .formats import PROTOCOLS, export_clash, export_v2ray
-from .messages import local_stamp, test_message
+from .singbox import export_singbox
+from .messages import format_message, local_stamp
 from .paths import bundled_core, resource_root
 from .rules import RULE_ACTIONS, RULE_TYPES
 from .service import SubscriptionService
 from .store import MAX_BACKUP_BYTES, Store
-from .table import NODE_ROLE, NodeDelegate, NodeFilter, NodeModel, proxy_tested, test_state
+from .table import NODE_ROLE, NodeDelegate, NodeFilter, NodeModel, node_test_state, proxy_tested
 from .theme import ACCENT, AMBER, BLUE, GREEN, INK, MUTED, RED, icon
 from .widgets import Metric, Switch, button, divider, icon_button, label
 
@@ -370,9 +371,11 @@ class MainWindow(QMainWindow):
         filters.addWidget(self.subscription_count)
         layout.addLayout(filters)
         self.client_widgets = {}
+        client_colors = {"clash": ACCENT, "v2ray": BLUE, "singbox": AMBER}
         for format, title, subtitle, symbol in (
             ("clash", "Clash Verge", "Mihomo YAML", "network"),
             ("v2ray", "v2rayN", "Base64 URI", "server"),
+            ("singbox", "sing-box", "完整 JSON 配置", "globe"),
         ):
             card = QFrame()
             card.setObjectName("client")
@@ -381,7 +384,7 @@ class MainWindow(QMainWindow):
             content.setSpacing(16)
             heading = QHBoxLayout()
             graphic = QLabel()
-            graphic.setPixmap(icon(symbol, ACCENT if format == "clash" else BLUE, 25).pixmap(25, 25))
+            graphic.setPixmap(icon(symbol, client_colors[format], 25).pixmap(25, 25))
             graphic.setFixedWidth(38)
             heading.addWidget(graphic)
             names = QVBoxLayout()
@@ -645,7 +648,7 @@ class MainWindow(QMainWindow):
         values = (
             len(nodes),
             sum(bool(node["enabled"]) for node in nodes),
-            sum(test_state(node)[2] == "ok" for node in nodes),
+            sum(node_test_state(node)[2] == "ok" for node in nodes),
             sum(not proxy_tested(node) for node in nodes),
         )
         for metric, value in zip(self.metrics, values):
@@ -831,16 +834,20 @@ class MainWindow(QMainWindow):
             controls["url"].setCursorPosition(0)
             ready = bool(nodes)
             message = "已就绪" if nodes else "暂无已启用节点"
-            if ready and format == "clash":
+            if ready and format in ("clash", "singbox"):
                 message = f"已就绪 · 含 {active_rules} 条规则" if active_rules else "已就绪 · 仅兜底规则"
             try:
                 if nodes:
-                    self._export_cache[format] = (
-                        export_clash(nodes, self.store.settings()["test_url"], rules=rules)
-                        if format == "clash" else export_v2ray(nodes)
-                    )
+                    if format == "clash":
+                        self._export_cache[format] = export_clash(
+                            nodes, self.store.settings()["test_url"], rules=rules)
+                    elif format == "singbox":
+                        self._export_cache[format] = export_singbox(
+                            nodes, self.store.settings()["test_url"], rules=rules)
+                    else:
+                        self._export_cache[format] = export_v2ray(nodes)
             except ValueError as error:
-                message = f"导出受限：{error}"
+                message = f"导出受限：{format_message(str(error))}"
                 ready = False
             controls["status"].setText(message)
             controls["status"].setStyleSheet(f"color: {GREEN if ready else MUTED};")
@@ -861,11 +868,13 @@ class MainWindow(QMainWindow):
         content = self._export_cache.get(format, "")
         if format == "v2ray":
             content = base64.b64decode(content).decode("utf-8")
-        PreviewDialog("Clash YAML" if format == "clash" else "v2rayN 节点列表", content, self).exec()
+        title = {"clash": "Clash YAML", "v2ray": "v2rayN 节点列表", "singbox": "sing-box 配置"}[format]
+        PreviewDialog(title, content, self).exec()
 
     def save_subscription(self, format):
-        suffix = "yaml" if format == "clash" else "txt"
-        name = "node-desk-clash.yaml" if format == "clash" else "node-desk-v2ray.txt"
+        suffix = {"clash": "yaml", "v2ray": "txt", "singbox": "json"}[format]
+        name = {"clash": "node-desk-clash.yaml", "v2ray": "node-desk-v2ray.txt",
+                "singbox": "node-desk-sing-box.json"}[format]
         path, _ = QFileDialog.getSaveFileName(self, "导出订阅", name, f"订阅文件 (*.{suffix})")
         if path:
             try:
@@ -1091,7 +1100,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self.close)
 
     def retest_failed(self):
-        ids = [node["id"] for node in self.model.nodes if test_state(node)[2] in ("failed", "unsupported")]
+        ids = [node["id"] for node in self.model.nodes if node_test_state(node)[2] in ("failed", "unsupported")]
         if not ids:
             self.notice("暂无异常节点")
             return
@@ -1143,7 +1152,7 @@ class MainWindow(QMainWindow):
             self.history_table.setCellWidget(row, 6, holder)
         self.retest_button.setEnabled(
             not self.busy()
-            and any(test_state(node)[2] in ("failed", "unsupported") for node in self.model.nodes)
+            and any(node_test_state(node)[2] in ("failed", "unsupported") for node in self.model.nodes)
         )
 
     def history_detail_row(self, index):

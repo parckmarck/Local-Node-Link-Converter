@@ -15,8 +15,8 @@ from node_desk.service import SubscriptionService
 from node_desk.store import Store
 from node_desk.theme import apply_theme
 from node_desk.ui import MainWindow
-from node_desk.table import proxy_tested, test_state as node_test_state
-from node_desk.messages import test_message as display_test_message
+from node_desk.table import node_test_state, proxy_tested
+from node_desk.messages import display_test_message
 
 
 @pytest.fixture(scope="module")
@@ -97,13 +97,15 @@ def test_search_groups_and_selection(window):
 def test_subscription_views_populate_and_empty_scope_disables_actions(window):
     populate(window)
     window.navigate(1)
-    assert len(window._export_cache) == 2
+    assert len(window._export_cache) == 3
     assert window.client_widgets["clash"]["copy"].isEnabled()
+    assert window.client_widgets["singbox"]["copy"].isEnabled()
     ids = [node["id"] for node in window.model.nodes]
     window.store.set_enabled(ids, False)
     window.refresh()
     assert window._export_cache == {}
     assert not window.client_widgets["clash"]["copy"].isEnabled()
+    assert not window.client_widgets["singbox"]["copy"].isEnabled()
 
 
 def test_edit_metadata_and_export(window):
@@ -116,6 +118,7 @@ def test_edit_metadata_and_export(window):
     window.refresh()
     window.navigate(1)
     assert "Renamed" in window._export_cache["clash"]
+    assert '"tag": "Renamed"' in window._export_cache["singbox"]
 
 
 def test_native_background_test_completes_without_blocking_ui(window, app):

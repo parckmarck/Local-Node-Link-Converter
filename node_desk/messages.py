@@ -60,7 +60,7 @@ _MESSAGES = {
 }
 
 
-def test_message(message: str | None) -> str:
+def display_test_message(message: str | None) -> str:
     value = message or ""
     if value in _MESSAGES:
         return _MESSAGES[value]
@@ -195,6 +195,9 @@ _FORMAT_MESSAGES = {
     "Unsupported SSR protocol.": "不支持的 SSR 协议插件。",
     "Unsupported SSR obfs.": "不支持的 SSR 混淆插件。",
     "HTTP proxy links cannot contain a path; remote subscriptions are not fetched.": "HTTP 代理链接不能带路径；如果这是订阅地址，本程序不抓取远程订阅。",
+    "At least one node is required for the sing-box export.": "sing-box 导出至少需要一个节点。",
+    "Hysteria2 pinSHA256 certificate pinning cannot be expressed in sing-box; use the Clash subscription.": "sing-box 无法表达 Hysteria2 的 pinSHA256 证书固定，请使用 Clash 订阅。",
+    "Trojan-Go SS encryption cannot be expressed in sing-box; use the Clash subscription.": "sing-box 无法表达 Trojan-Go 的 SS 加密，请使用 Clash 订阅。",
 }
 
 _FORMAT_LABELS = {
@@ -225,6 +228,7 @@ _FORMAT_LABELS = {
 
 _FORMAT_PATTERNS = (
     (r"(\S+) nodes cannot be shared with v2rayN; use Clash export\.", "v2rayN 不支持 {0} 节点，请使用 Clash 订阅。"),
+    (r"(\S+) nodes cannot be exported to sing-box; use the Clash subscription\.", "sing-box 不支持 {0} 节点，请使用 Clash 订阅。"),
     (r"(.+) and (.+) are both required before @\.", "@ 之前必须同时写 {label} 和 {label2}。"),
     (r"(.+) must be a UUID or a custom string of at most 30 bytes\.", "{label} 必须是 UUID，或不超过 30 字节的自定义字符串。"),
     (r"Node (\d+) must be a record\.", "第 {0} 个节点的记录格式无效。"),

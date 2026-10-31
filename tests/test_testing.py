@@ -581,7 +581,13 @@ class MihomoIntegrationTests(unittest.TestCase):
             tester = self.make_tester(target, timeout_ms=1500)
             result = tester.run([node(closed_port())], on_result=self.capture(tester))[0]
             self.assertEqual(result["status"], "failed")
-            self.assertIn("unreachable", result["message"])
+            # A closed loopback port is normally refused immediately; some
+            # security suites drop loopback SYNs instead, surfacing the
+            # timeout message. Both identify the endpoint as not reachable.
+            self.assertTrue(
+                "unreachable" in result["message"] or "timed out" in result["message"],
+                result["message"],
+            )
             self.assertEqual(target.requests, [])
 
     def test_wrong_target_status_and_redirect_are_not_success(self):

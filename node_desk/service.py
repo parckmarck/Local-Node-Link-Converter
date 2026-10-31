@@ -99,7 +99,7 @@ class SubscriptionService:
                         or parts[0] != "sub"
                         or not parts[1].isascii()
                         or not secrets.compare_digest(parts[1], settings["token"])
-                        or parts[2] not in ("clash.yaml", "v2ray.txt")
+                        or parts[2] not in ("clash.yaml", "v2ray.txt", "sing-box.json")
                     ):
                         return self.respond(404, "Not found.")
                     query = parse_qs(request.query, max_num_fields=4, keep_blank_values=True)
@@ -115,12 +115,19 @@ class SubscriptionService:
                     if not nodes:
                         return self.respond(409, "No enabled nodes in this subscription.")
                     from .formats import export_clash, export_v2ray
+                    from .singbox import export_singbox
 
                     if parts[2] == "clash.yaml":
                         return self.respond(
                             200, export_clash(nodes, test_url=settings["test_url"],
                                               rules=service.store.list_rules()),
                             "text/yaml; charset=utf-8",
+                        )
+                    if parts[2] == "sing-box.json":
+                        return self.respond(
+                            200, export_singbox(nodes, test_url=settings["test_url"],
+                                                rules=service.store.list_rules()),
+                            "application/json; charset=utf-8",
                         )
                     return self.respond(200, export_v2ray(nodes))
                 except (ValueError, UnicodeError):
@@ -143,9 +150,10 @@ class SubscriptionService:
         return self.port
 
     def url(self, format: str, group: str | None = None) -> str:
-        if format not in ("clash", "v2ray"):
+        filenames = {"clash": "clash.yaml", "v2ray": "v2ray.txt", "singbox": "sing-box.json"}
+        if format not in filenames:
             raise ValueError("Unknown subscription format.")
-        filename = "clash.yaml" if format == "clash" else "v2ray.txt"
+        filename = filenames[format]
         token = self.store.settings()["token"]
         url = f"http://127.0.0.1:{self.port}/sub/{token}/{filename}"
         return url if group is None else url + "?" + urlencode({"group": group})

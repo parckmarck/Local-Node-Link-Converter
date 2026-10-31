@@ -444,6 +444,9 @@ class Store:
         if row is None:
             raise KeyError("Test session no longer exists.")
         return self._decode(row[0])
+
+    def export_backup(self) -> str:
+        """Serialize nodes and rules for the backup file; settings are not included."""
         nodes = []
         for node in self.list_nodes():
             nodes.append(
