@@ -105,11 +105,62 @@ def _remove_tree_collect_errors(path: Path) -> list[Path]:
     return failures
 
 
-def _stop_leftover_kernels(distribution: Path) -> list[int]:
-    """结束映像路径正好是本发布目录测试内核（vendor\\mihomo.exe）的残留进程。
+def _image_path(pid: int) -> str:
+    """进程映像完整路径；查询失败（如权限不足）时返回空字符串。"""
+    if os.name != "nt":
+        return ""
+    import ctypes
+    from ctypes import wintypes
 
-    只处理路径完全匹配的进程，不会碰到你其它客户端自己的 mihomo。
-    """
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.restype = ctypes.c_ssize_t
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+    kernel32.QueryFullProcessImageNameW.argtypes = (
+        ctypes.c_ssize_t, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD),
+    )
+    kernel32.CloseHandle.argtypes = (ctypes.c_ssize_t,)
+    handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return ""
+    try:
+        size = wintypes.DWORD(32768)
+        buffer = ctypes.create_unicode_buffer(size.value)
+        if kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+            return buffer.value
+        return ""
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _terminate_process(pid: int) -> bool:
+    """结束进程并等待其退出；无权限（例如对方以管理员身份运行）时返回 False。"""
+    if os.name != "nt":
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.restype = ctypes.c_ssize_t
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.TerminateProcess.restype = wintypes.BOOL
+    kernel32.TerminateProcess.argtypes = (ctypes.c_ssize_t, wintypes.UINT)
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.WaitForSingleObject.argtypes = (ctypes.c_ssize_t, wintypes.DWORD)
+    kernel32.CloseHandle.argtypes = (ctypes.c_ssize_t,)
+    handle = kernel32.OpenProcess(0x00100000 | 0x0001, False, pid)  # SYNCHRONIZE | TERMINATE
+    if not handle:
+        return False
+    try:
+        if not kernel32.TerminateProcess(handle, 1):
+            return False
+        return kernel32.WaitForSingleObject(handle, 5000) == 0
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _kernel_processes(distribution: Path) -> list[int]:
+    """正从本发布目录运行的测试内核进程 PID；不会碰你其它客户端自己的 mihomo。"""
     if os.name != "nt":
         return []
     import ctypes
@@ -136,81 +187,172 @@ def _stop_leftover_kernels(distribution: Path) -> list[int]:
     kernel32.Process32FirstW.argtypes = (ctypes.c_ssize_t, ctypes.POINTER(ProcessEntry))
     kernel32.Process32NextW.restype = wintypes.BOOL
     kernel32.Process32NextW.argtypes = (ctypes.c_ssize_t, ctypes.POINTER(ProcessEntry))
-    kernel32.OpenProcess.restype = ctypes.c_ssize_t
-    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
-    kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
-    kernel32.QueryFullProcessImageNameW.argtypes = (
-        ctypes.c_ssize_t, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD),
-    )
-    kernel32.TerminateProcess.restype = wintypes.BOOL
-    kernel32.TerminateProcess.argtypes = (ctypes.c_ssize_t, wintypes.UINT)
-    kernel32.WaitForSingleObject.restype = wintypes.DWORD
-    kernel32.WaitForSingleObject.argtypes = (ctypes.c_ssize_t, wintypes.DWORD)
-    kernel32.CloseHandle.restype = wintypes.BOOL
     kernel32.CloseHandle.argtypes = (ctypes.c_ssize_t,)
 
-    target = os.path.normcase(
-        os.path.abspath(str(distribution / "_internal" / "vendor" / "mihomo.exe"))
-    )
-    stopped: list[int] = []
+    target = os.path.normcase(os.path.abspath(str(distribution / "_internal" / "vendor" / "mihomo.exe")))
+    pids: list[int] = []
     snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)  # TH32CS_SNAPPROCESS
     if snapshot == -1:
-        return stopped
+        return pids
     try:
         entry = ProcessEntry()
         entry.dwSize = ctypes.sizeof(ProcessEntry)
         more = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
         while more:
             if entry.szExeFile.lower() == "mihomo.exe":
-                handle = kernel32.OpenProcess(
-                    0x00100000 | 0x1000 | 0x0001, False, entry.th32ProcessID
-                )  # SYNCHRONIZE | QUERY_LIMITED_INFORMATION | TERMINATE
-                if handle:
-                    try:
-                        size = wintypes.DWORD(32768)
-                        buffer = ctypes.create_unicode_buffer(size.value)
-                        if (
-                            kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size))
-                            and os.path.normcase(buffer.value) == target
-                            and kernel32.TerminateProcess(handle, 1)
-                        ):
-                            kernel32.WaitForSingleObject(handle, 5000)
-                            stopped.append(int(entry.th32ProcessID))
-                    finally:
-                        kernel32.CloseHandle(handle)
+                pid = int(entry.th32ProcessID)
+                if os.path.normcase(_image_path(pid)) == target:
+                    pids.append(pid)
             more = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
     finally:
         kernel32.CloseHandle(snapshot)
-    return stopped
+    return pids
+
+
+def _file_lockers(path: Path) -> list[tuple[int, str, str]]:
+    """用 Windows 重启管理器查询占用文件的进程，返回 (PID, 程序名, 映像路径)。"""
+    if os.name != "nt":
+        return []
+    import ctypes
+    from ctypes import wintypes
+
+    class UniqueProcess(ctypes.Structure):
+        _fields_ = [("dwProcessId", wintypes.DWORD), ("ProcessStartTime", wintypes.FILETIME)]
+
+    class ProcessInfo(ctypes.Structure):
+        _fields_ = [
+            ("Process", UniqueProcess),
+            ("strAppName", wintypes.WCHAR * 256),
+            ("strServiceShortName", wintypes.WCHAR * 64),
+            ("ApplicationType", wintypes.DWORD),
+            ("AppStatus", wintypes.ULONG),
+            ("TSSessionId", wintypes.DWORD),
+            ("bRestartable", wintypes.BOOL),
+        ]
+
+    manager = ctypes.WinDLL("rstrtmgr", use_last_error=True)
+    manager.RmStartSession.argtypes = (ctypes.POINTER(wintypes.DWORD), wintypes.DWORD, wintypes.LPWSTR)
+    manager.RmStartSession.restype = wintypes.DWORD
+    manager.RmRegisterResources.argtypes = (
+        wintypes.DWORD, wintypes.UINT, ctypes.POINTER(wintypes.LPCWSTR),
+        wintypes.UINT, ctypes.c_void_p, wintypes.UINT, ctypes.c_void_p,
+    )
+    manager.RmRegisterResources.restype = wintypes.DWORD
+    manager.RmGetList.argtypes = (
+        wintypes.DWORD, ctypes.POINTER(wintypes.UINT), ctypes.POINTER(wintypes.UINT),
+        ctypes.POINTER(ProcessInfo), ctypes.POINTER(wintypes.DWORD),
+    )
+    manager.RmGetList.restype = wintypes.DWORD
+    manager.RmEndSession.argtypes = (wintypes.DWORD,)
+    manager.RmEndSession.restype = wintypes.DWORD
+
+    session = wintypes.DWORD()
+    key = ctypes.create_unicode_buffer(33)
+    if manager.RmStartSession(ctypes.byref(session), 0, key) != 0:
+        return []
+    try:
+        files = (wintypes.LPCWSTR * 1)(str(path))
+        if manager.RmRegisterResources(session.value, 1, files, 0, None, 0, None) != 0:
+            return []
+        needed, count = wintypes.UINT(0), wintypes.UINT(0)
+        reasons = wintypes.DWORD(0)
+        code = manager.RmGetList(session.value, ctypes.byref(needed), ctypes.byref(count), None,
+                                 ctypes.byref(reasons))
+        if needed.value == 0 or code not in (0, 234):  # 234 = ERROR_MORE_DATA
+            return []
+        infos = (ProcessInfo * needed.value)()
+        count = wintypes.UINT(needed.value)
+        if manager.RmGetList(session.value, ctypes.byref(needed), ctypes.byref(count), infos,
+                             ctypes.byref(reasons)) != 0:
+            return []
+        lockers = []
+        for info in infos[: count.value]:
+            pid = int(info.Process.dwProcessId)
+            lockers.append((pid, info.strAppName, _image_path(pid)))
+        return lockers
+    finally:
+        manager.RmEndSession(session.value)
+
+
+def _describe_process(pid: int, name: str, image: str) -> str:
+    return f"  PID {pid}  {image or name or '(未知程序)'}"
 
 
 def remove_old_distribution(distribution: Path) -> None:
-    """删除旧发布目录；自动清理残留测试内核，其余占用给出可操作的提示。"""
+    """删除旧发布目录：自动结束残留测试内核、等待安全软件扫描结束，其余占用给出可操作提示。"""
     ensure_dist_not_locked(distribution)  # 也拦住“打包开始后用户又打开了程序”的情况
     failures = _remove_tree_collect_errors(distribution)
     if not failures:
         return
-    if failures[0].name.lower() == "mihomo.exe":
+    kernel_path = os.path.normcase(
+        os.path.abspath(str(distribution / "_internal" / "vendor" / "mihomo.exe"))
+    )
+    attempts = 8
+    for attempt in range(1, attempts + 1):
+        locked = failures[0]
         try:
-            stopped = _stop_leftover_kernels(distribution)
+            lockers = _file_lockers(locked)
         except Exception:
-            stopped = []
-        if stopped:
-            listed = "、".join(f"PID {pid}" for pid in stopped)
-            print(f"检测到上次运行残留的测试内核进程（mihomo.exe，{listed}），已自动结束。")
-            for _ in range(10):
-                time.sleep(0.2)
-                failures = _remove_tree_collect_errors(distribution)
-                if not failures:
-                    print("残留内核已结束，继续打包。")
-                    return
+            lockers = []
+        kernels = {pid for pid, _, image in lockers if image and os.path.normcase(image) == kernel_path}
+        if locked.name.lower() == "mihomo.exe":
+            try:
+                kernels.update(_kernel_processes(distribution))
+            except Exception:
+                pass
+        apps = [
+            (pid, name, image) for pid, name, image in lockers if pid not in kernels
+            and (Path(image).name if image else name).lower() in ("nodedesk.exe", "node desk")
+        ]
+        if apps:
+            print()
+            print("NodeDesk 程序正在运行，占用了旧发布目录中的文件：")
+            for item in apps:
+                print(_describe_process(*item))
+            print("请先关闭 NodeDesk 窗口（包括已安装版本的窗口），然后重新双击「重新打包.cmd」。")
+            raise SystemExit(1)
+        if kernels:
+            ended = [pid for pid in sorted(kernels) if _terminate_process(pid)]
+            stuck = sorted(kernels - set(ended))
+            if ended:
+                listed = "、".join(f"PID {pid}" for pid in ended)
+                print(f"检测到上次运行残留的测试内核进程（mihomo.exe，{listed}），已自动结束。")
+            if stuck:
+                print()
+                listed = "、".join(f"PID {pid}" for pid in stuck)
+                print(f"发现残留的测试内核进程（mihomo.exe，{listed}），但没有权限结束它，")
+                print("它可能以管理员身份启动。请在任务管理器（Ctrl+Shift+Esc）→「详细信息」中")
+                print("结束 mihomo.exe 后，重新双击「重新打包.cmd」。")
+                raise SystemExit(1)
+            time.sleep(0.5)
         else:
-            print("dist 中的 mihomo.exe 正被占用，但没有找到对应的 mihomo.exe 进程；")
-            print("这通常意味着安全软件或系统正在扫描该文件。")
+            others = sorted({
+                (Path(image).name if image else name) or f"PID {pid}"
+                for pid, name, image in lockers
+            })
+            who = "、".join(others) if others else "安全软件或系统"
+            print(f"旧发布目录中的 {locked.name} 正被 {who} 占用（通常是后台扫描），"
+                  f"等待后重试（{attempt}/{attempts}）……")
+            time.sleep(2.5)
+        failures = _remove_tree_collect_errors(distribution)
+        if not failures:
+            print("占用已解除，继续打包。")
+            return
+    locked = failures[0]
     print()
-    print(f"无法删除旧的发布目录，文件仍被占用：{failures[0]}")
-    print("请在任务管理器（Ctrl+Shift+Esc）中结束 NodeDesk.exe 与 mihomo.exe 进程后重试；")
-    print("稍等片刻、甚至重启电脑后再双击「重新打包.cmd」也能解决。")
+    print(f"无法删除旧的发布目录，文件仍被占用：{locked}")
+    try:
+        lockers = _file_lockers(locked)
+    except Exception:
+        lockers = []
+    if lockers:
+        print("当前占用它的程序：")
+        for item in lockers:
+            print(_describe_process(*item))
+        print("请关闭或结束上述程序后重试；若是安全软件，请把「节点维护」文件夹加入其信任（排除）列表。")
+    else:
+        print("没有查到占用它的程序，一般是安全软件在后台扫描：请稍等一两分钟后再双击「重新打包.cmd」；")
+        print("反复出现时，把「节点维护」文件夹加入安全软件的信任（排除）列表，或重启电脑后再试。")
     raise SystemExit(1)
 
 
@@ -359,7 +501,7 @@ def write_checksums() -> None:
         f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(dist).as_posix()}\n"
         for path in files
     ]
-    (dist / "SHA256SUMS.txt").write_text("".join(lines), encoding="ascii")
+    (dist / "SHA256SUMS.txt").write_text("".join(lines), encoding="ascii", newline="\n")
 
 
 def clean_intermediates():

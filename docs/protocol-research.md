@@ -123,21 +123,34 @@ Credentials and query values are decoded exactly once.
 
 | Format | Accepted Subset |
 | --- | --- |
-| VLESS | Dashed UUID, explicit port, `encryption=none`; TCP / WS / gRPC gun; TLS or Reality; SNI, portable fingerprint, compatible ALPN, WS Host/path/early data, gRPC service, and matching/default authority. Vision requires TLS/Reality TCP. |
-| VMess | v2rayN Base64 JSON v2, strict UUID and numeric fields; TCP / WS / gRPC gun; TLS, cipher, alterId, SNI, fingerprint, compatible ALPN. Optional null fields mean unset; required endpoint/UUID fields cannot be null. JSON field order does not affect identity. |
+| VLESS | Standard UUID forms (dashed, unbraced, braced, or URN) canonicalized to dashed, or an Xray custom ID of at most 30 bytes; explicit port, `encryption=none`; TCP (optionally with HTTP header obfuscation; a missing host keeps Mihomo's server-address default) / WS / gRPC gun; TLS or Reality; SNI, portable fingerprint, compatible ALPN, WS Host/path/early data, gRPC service, and matching/default authority. Vision requires TLS/Reality TCP without header obfuscation. |
+| VMess | v2rayN Base64 JSON v2, standard UUID forms canonicalized to dashed (custom IDs of at most 30 bytes are mapped like VLESS, matching Mihomo's UUIDMap) and strict numeric fields; TCP (optionally with HTTP header obfuscation; a missing host keeps Mihomo's server-address default) / WS / gRPC gun; TLS, cipher, alterId, SNI, fingerprint, compatible ALPN. Optional null fields mean unset; required endpoint/UUID fields cannot be null. JSON field order does not affect identity. |
 | SOCKS5 | `socks://` whole-payload Base64, Base64 userinfo, and `socks5://username:password@host:port`; unauthenticated endpoints; encoded authentication and bracketed IPv6. Canonical export is `socks://`. |
 | Trojan | TLS TCP / WS / gRPC gun, encoded password, SNI/fingerprint/compatible ALPN and supported transport fields. |
 | Shadowsocks | AES-128/256-GCM and ChaCha20-IETF-Poly1305; legacy whole-payload and SIP002; the three listed AEAD-2022 ciphers with cipher-sized Base64 keys and separately encoded userinfo (identity key chains require AES); obfs-local/simple-obfs and WebSocket v2ray-plugin within the documented subset. |
+| Trojan-Go (1.5.0) | `trojan-go://password@host:port` with `sni`, `type=original|ws`, WS `host`/`path`, and `encryption=ss;<aead>;<password>` (Mihomo `ss-opts`); `plugin` is rejected. Exported to Clash only. |
+| SSR (1.5.0) | `ssr://` Base64URL payload `host:port:protocol:method:obfs:base64(password)/?obfsparam&protoparam&remarks&group`; common stream ciphers, `auth_*` protocols and `http_simple`/`tls1.2_ticket_auth`-style obfs; remarks become the name and are rewritten on export. |
+| HTTP (1.5.0) | `http://`/`https://[user:pass@]host:port`; `https` accepts `sni` and `insecure`. Paths are rejected so remote subscription URLs are not mistaken for proxies. |
+| Hysteria2 (1.5.0) | `hysteria2://`/`hy2://password@host:port` with `sni`, `insecure`, `obfs=salamander`+`obfs-password`, `pinSHA256`, `alpn`, `up`/`down`, and `mport`/`ports` port hopping (Mihomo `ports`). |
+| Hysteria v1 (1.5.0) | `hysteria://host:port` with `protocol`, `auth`, `peer`, `insecure`, `upmbps`/`downmbps`, `alpn`, `obfs=xplus`+`obfsParam`. Clash export only. |
+| TUIC (1.5.0) | v5 `tuic://uuid:password@host:port` with `congestion_control`, `udp_relay_mode`, `alpn` (default h3), `sni`, `allow_insecure`, `disable_sni`; v4 token links are rejected. |
+| AnyTLS (1.5.0) | `anytls://password@host:port` with `sni`, `insecure`, `alpn`, `fp`. |
+| WireGuard (1.5.0) | v2rayN `wireguard://privatekey@host:port?publickey&presharedkey&address&reserved&mtu`; 32-byte keys, one IPv4 and/or one IPv6 interface address, three reserved bytes; `wnoise*` is rejected. |
+| Mieru (1.5.0) | `mierus://username:password@host:port` with `multiplexing`, optional `profile` (name fallback) and `mtu` (default 1400 only); TCP transport only, matching Mihomo. Clash export only. |
+| SSH (1.5.0) | `ssh://username:password@host:port`; key-based authentication has no link form. Clash export only. |
 
 Intentional errors, rather than silently weakened or incomplete output:
 
-- Unknown/repeated URI options and JSON fields, unsupported transports, header
-  obfuscation, non-`none` VLESS encryption, non-gun gRPC, distinct gRPC authority,
+- Unknown/repeated URI options and JSON fields, unsupported transports, non-HTTP
+  header obfuscation (HTTP obfuscation is rejected for Trojan or together with
+  Vision), non-`none` VLESS encryption,
+  non-gun gRPC, distinct gRPC authority,
   incompatible forced ALPN, Vision on WS/gRPC, Reality over WS, and nonempty
   `spx`, `pqv`, `ech`, `pcs`, `vcn`, or unimplemented finalmask requirements.
 - Unscoped, syntactically valid IP addresses and DNS/IDNA hostnames only. IPv6
-  zones, custom non-UUID Xray IDs, VMess JSON v1, and standard UUID-style VMess
-  URLs are not accepted by this slice. Hysteria2 is intentionally deferred.
+  zones, VMess JSON v1, and standard UUID-style VMess URLs are not accepted by
+  this slice; custom non-UUID IDs are accepted for VLESS only. Hysteria2 is
+  intentionally deferred.
 - SOCKS username/password must both be absent or both have 1-255 UTF-8 bytes.
   A colon inside a username is not representable in v2rayN's shared userinfo.
 - Deprecated Shadowsocks stream ciphers and unknown plugins are rejected.

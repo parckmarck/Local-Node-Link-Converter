@@ -41,8 +41,10 @@ _TICK = 0.025
 _MAX_RESPONSE = 65_536
 _PROXY_TYPES = {
     "ss", "ssr", "vmess", "vless", "trojan", "socks5", "http",
-    "hysteria", "hysteria2", "tuic", "anytls", "snell",
+    "hysteria", "hysteria2", "tuic", "anytls", "snell", "wireguard", "mieru", "ssh",
 }
+# Record protocols whose Mihomo type differs from the share-link family.
+_PROTOCOL_TYPES = {"trojan-go": "trojan", "hy2": "hysteria2"}
 _UDP_TYPES = {"hysteria", "hysteria2", "hy2", "tuic", "wireguard", "quic", "masque"}
 _CONNECT_PENDING = {
     errno.EINPROGRESS, errno.EWOULDBLOCK, errno.EALREADY,
@@ -690,7 +692,7 @@ class NodeTester:
         kind = proxy.get("type")
         if not isinstance(kind, str) or kind not in _PROXY_TYPES:
             raise _Failure("This proxy protocol is not supported by the isolated tester.", "unsupported")
-        if node.get("protocol") != kind and not (kind == "hysteria2" and node.get("protocol") == "hy2"):
+        if _PROTOCOL_TYPES.get(node.get("protocol"), node.get("protocol")) != kind:
             raise _Failure("Node protocol does not match its proxy definition.")
         if proxy.get("server") != node.get("server") or proxy.get("port") != port:
             raise _Failure("Node endpoint does not match its proxy definition.")

@@ -141,13 +141,31 @@ class UriValidationTests(unittest.TestCase):
             parse_uri("socks5://2001:db8::1:1080")
 
     def test_invalid_and_nonstandard_uuids(self):
-        for identifier in ("", "not-a-uuid", UUID.replace("-", ""), "{" + UUID + "}",
-                           UUID[:-1] + "g", "urn:uuid:" + UUID):
+        for identifier in ("", UUID[:-1] + "g", "x" * 31):
             with self.subTest(identifier=identifier):
                 with self.assertRaises(FormatError):
                     parse_uri(f"vless://{quote(identifier, safe='')}@example.com:443")
                 with self.assertRaises(FormatError):
                     parse_uri(vmess(id=identifier))
+
+    def test_custom_ids_match_the_kernel_mapping(self):
+        # Mihomo maps non-UUID IDs through utils.UUIDMap for both VLESS and VMess.
+        for protocol, uri in (("vless", "vless://custom-id@example.com:443"),
+                              ("vmess", vmess(id="custom-id"))):
+            with self.subTest(protocol=protocol):
+                node = parse_uri(uri)
+                self.assertEqual(node["clash"]["uuid"], "custom-id")
+                self.assertEqual(parse_uri(node["uri"]), node)
+
+    def test_standard_uuid_variants_are_canonicalized(self):
+        for identifier in (UUID.upper(), UUID.replace("-", ""), "{" + UUID + "}",
+                           "urn:uuid:" + UUID):
+            with self.subTest(identifier=identifier):
+                node = parse_uri(f"vless://{quote(identifier, safe='')}@example.com:443")
+                self.assertEqual(node["clash"]["uuid"], UUID)
+                self.assertIn(UUID + "@example.com:443", node["uri"])
+                vm = parse_uri(vmess(id=identifier))
+                self.assertEqual(vm["clash"]["uuid"], UUID)
 
     def test_encoded_uuid_is_decoded_once_and_normalized(self):
         encoded = UUID.upper().replace("-", "%2D")
@@ -194,7 +212,7 @@ class UriValidationTests(unittest.TestCase):
                     parse_uri(trojan(password="test").replace("test@", "test" + encoded + "@"))
 
     def test_unsupported_schemes_and_authority_paths(self):
-        for uri in ("https://example.com/sub", "ssr://example", "hy2://pw@example.com:443",
+        for uri in ("https://example.com/sub", "ssr://example", "snell://psk@example.com:443",
                     f"vless://{UUID}@example.com:443/ws", "socks5://example.com:1080/path",
                     "trojan://u:p@ss@example.com:443"):
             with self.subTest(uri=uri):
@@ -225,6 +243,43 @@ class VlessTests(unittest.TestCase):
         self.assertEqual(node["clash"]["network"], "tcp")
         self.assertFalse(node["clash"]["tls"])
         self.assertNotIn("reality-opts", node["clash"])
+
+    def test_custom_vless_ids_are_kept_verbatim(self):
+        for identifier in ("not-a-uuid", "用户1", "x" * 30):
+            with self.subTest(identifier=identifier):
+                node = parse_uri(f"vless://{quote(identifier, safe='')}@example.com:443")
+                self.assertEqual(node["clash"]["uuid"], identifier)
+                self.assertEqual(parse_uri(node["uri"]), node)
+                self.assertIn(quote(identifier, safe="") + "@example.com:443", node["uri"])
+                self.assertEqual(len(parse_batch(export_v2ray([node]))["nodes"]), 1)
+        for identifier in ("x" * 31, "é" * 16):
+            with self.subTest(identifier=identifier):
+                with self.assertRaises(FormatError):
+                    parse_uri(f"vless://{quote(identifier, safe='')}@example.com:443")
+
+    def test_tcp_http_header_obfuscation(self):
+        options = {"security": "tls", "headerType": "http",
+                   "host": "cdn.example,cdn2.example", "path": "/a,/b"}
+        node = parse_uri(vless(options))
+        self.assertEqual(node["clash"]["network"], "http")
+        self.assertTrue(node["clash"]["tls"])
+        self.assertEqual(node["clash"]["http-opts"], {
+            "method": "GET", "path": ["/a", "/b"],
+            "headers": {"Host": ["cdn.example", "cdn2.example"]},
+        })
+        self.assertEqual(parse_uri(node["uri"]), node)
+        self.assertEqual(parse_qs(urlsplit(node["uri"]).query)["headerType"], ["http"])
+        self.assertIn("http-opts", yaml.safe_load(export_clash([node]))["proxies"][0])
+        self.assertEqual(len(parse_batch(export_v2ray([node]))["nodes"]), 1)
+        plain = parse_uri(vless({"headerType": "http", "host": "cdn.example"}))
+        self.assertFalse(plain["clash"]["tls"])
+        self.assertEqual(plain["clash"]["http-opts"]["path"], ["/"])
+        self.assertEqual(plain["clash"]["http-opts"]["headers"], {"Host": ["cdn.example"]})
+        bare = parse_uri(vless({"headerType": "http"}))
+        self.assertEqual(bare["clash"]["network"], "http")
+        self.assertNotIn("headers", bare["clash"]["http-opts"])
+        self.assertEqual(bare["clash"]["http-opts"]["path"], ["/"])
+        self.assertEqual(parse_uri(bare["uri"]), bare)
 
     def test_tls_options_are_preserved(self):
         options = {"security": "tls", "sni": "tls.example", "fp": "firefox",
@@ -302,7 +357,14 @@ class VlessTests(unittest.TestCase):
         for options in (
             {"security": "xtls"}, {"encryption": "mlkem768x25519plus.native.0rtt.test"},
             {"type": "kcp"}, {"type": "quic"}, {"type": "httpupgrade"}, {"type": "xhttp"},
-            {"headerType": "http"}, {"path": "/"}, {"host": "cdn.example"},
+            {"path": "/"}, {"host": "cdn.example"},
+            {"headerType": "srtp"}, {"headerType": "http", "host": "cdn.example,"},
+            {"headerType": "http", "host": "cdn.example", "type": "ws"},
+            {"headerType": "http", "host": "cdn.example", "serviceName": "test"},
+            {"headerType": "http", "host": "cdn.example", "path": "relative"},
+            {"headerType": "http", "host": "cdn.example", "path": "/a, /b"},
+            {"headerType": "http", "host": "cdn.example", "security": "tls",
+             "flow": "xtls-rprx-vision"},
             {"security": "none", "sni": "tls.example"}, {"fp": "chrome"},
             {"pbk": PUBLIC_KEY}, {"sid": ""}, {"allowInsecure": "yes"},
             {"security": "tls", "fp": "not-a-fingerprint"},
@@ -376,6 +438,25 @@ class VmessTests(unittest.TestCase):
         node = parse_uri(vmess(net="grpc", path="Service"))
         self.assertEqual(node["clash"]["grpc-opts"], {"grpc-service-name": "Service"})
 
+    def test_json_tcp_http_header_obfuscation(self):
+        node = parse_uri(vmess(type="http", host="cdn.example", path="/vm"))
+        self.assertEqual(node["clash"]["network"], "http")
+        self.assertEqual(node["clash"]["http-opts"],
+                         {"method": "GET", "path": ["/vm"], "headers": {"Host": ["cdn.example"]}})
+        self.assertEqual(parse_uri(node["uri"]), node)
+        data = json.loads(base64.b64decode(node["uri"].partition("://")[2]))
+        self.assertEqual((data["net"], data["type"], data["host"], data["path"]),
+                         ("tcp", "http", "cdn.example", "/vm"))
+        self.assertEqual(len(parse_batch(export_v2ray([node]))["nodes"]), 1)
+        for updates in ({"type": "srtp"}, {"type": "http", "net": "ws", "host": "x.example"}):
+            with self.subTest(updates=updates):
+                with self.assertRaises(FormatError):
+                    parse_uri(vmess(**updates))
+        bare = parse_uri(vmess(type="http"))
+        self.assertEqual(bare["clash"]["network"], "http")
+        self.assertNotIn("headers", bare["clash"]["http-opts"])
+        self.assertEqual(parse_uri(bare["uri"]), bare)
+
     def test_optional_null_and_empty_insecure_fields_are_unset(self):
         node = parse_uri(vmess(ps=None, net=None, type=None, host=None, path=None,
                                scy=None, tls=None, sni=None, alpn=None, fp=None,
@@ -410,7 +491,7 @@ class VmessTests(unittest.TestCase):
             {"port": True}, {"port": 1.5}, {"port": []}, {"aid": -1}, {"aid": 65536},
             {"v": "1"}, {"ps": {}}, {"host": []}, {"tls": True}, {"add": None},
             {"extra": {"something": "sensitive"}}, {"net": "kcp"}, {"net": "h2"},
-            {"net": "tcp", "type": "http"}, {"scy": "wrong"}, {"tls": "reality"},
+            {"scy": "wrong"}, {"tls": "reality"},
             {"net": "grpc", "type": "multi"},
             {"net": "grpc", "host": "different.example", "tls": "tls"},
             {"insecure": "yes"}, {"insecure": "1", "allowInsecure": "1"},
@@ -533,7 +614,8 @@ class TrojanAndShadowsocksTests(unittest.TestCase):
 
     def test_trojan_refuses_unsupported_security_and_flow(self):
         for options in ({"security": "none"}, {"security": "reality"},
-                        {"flow": "xtls-rprx-vision"}, {"encryption": "none"}):
+                        {"flow": "xtls-rprx-vision"}, {"encryption": "none"},
+                        {"headerType": "http", "host": "cdn.example"}):
             with self.subTest(options=options):
                 with self.assertRaises(FormatError):
                     parse_uri(trojan(options))

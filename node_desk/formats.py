@@ -28,7 +28,7 @@ MAX_BATCH_LINES = 10_000
 MAX_NAME_LENGTH = 256
 _CONTROLS = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029\ud800-\udfff]")
 _BAD_ESCAPE = re.compile(r"%(?![0-9a-fA-F]{2})")
-_UUID = re.compile(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
+_CUSTOM_ID_BYTES = 30  # Xray/Mihomo map non-UUID VLESS IDs of 1-30 bytes to a UUIDv5
 _DNS_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 _VMESS_CIPHERS = {"auto", "aes-128-gcm", "chacha20-poly1305", "none", "zero"}
 _SS_CIPHERS = {
@@ -62,6 +62,44 @@ _RESERVED_NAMES = {
     "PROXY", "AUTO", "GLOBAL", "DIRECT", "REJECT", "REJECT-DROP",
     "PASS", "COMPATIBLE",
 }
+# Display order for protocol filters; values are the ``protocol`` field of records.
+PROTOCOLS = (
+    "vless", "vmess", "trojan", "trojan-go", "ss", "ssr", "socks5", "http",
+    "hysteria2", "hysteria", "tuic", "anytls", "wireguard", "mieru", "ssh",
+)
+# Protocols whose canonical links current v2rayN/Xray can import as-is.
+_V2RAYN_PROTOCOLS = {
+    "vless", "vmess", "trojan", "ss", "ssr", "socks5", "http",
+    "hysteria2", "tuic", "anytls", "wireguard",
+}
+_HYSTERIA2_OPTIONS = {"sni", "insecure", "obfs", "obfs-password", "pinSHA256", "alpn",
+                      "up", "down", "mport", "ports"}
+_HYSTERIA_OPTIONS = {"protocol", "auth", "peer", "insecure", "upmbps", "downmbps", "alpn",
+                     "obfs", "obfsParam"}
+_TUIC_OPTIONS = {"congestion_control", "udp_relay_mode", "alpn", "sni", "allow_insecure",
+                 "insecure", "allowInsecure", "disable_sni"}
+_ANYTLS_OPTIONS = {"sni", "insecure", "allowInsecure", "alpn", "fp"}
+_WIREGUARD_OPTIONS = {"publickey", "presharedkey", "address", "reserved", "mtu",
+                      "wnoise", "wnoisecount", "wpayloadsize", "wnoisedelay"}
+_MIERU_OPTIONS = {"profile", "mtu", "multiplexing", "transport"}
+_MIERU_MULTIPLEXING = {"MULTIPLEXING_OFF", "MULTIPLEXING_LOW", "MULTIPLEXING_MIDDLE",
+                       "MULTIPLEXING_HIGH"}
+_TROJAN_GO_OPTIONS = {"sni", "type", "host", "path", "encryption", "plugin"}
+_TROJAN_GO_CIPHERS = {"aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305"}
+_SSR_CIPHERS = {
+    "aes-128-cfb", "aes-192-cfb", "aes-256-cfb", "aes-128-ctr", "aes-192-ctr",
+    "aes-256-ctr", "rc4-md5", "chacha20", "chacha20-ietf", "xchacha20", "salsa20",
+    "none", "dummy",
+}
+_SSR_PROTOCOLS = {"origin", "auth_sha1_v4", "auth_aes128_md5", "auth_aes128_sha1",
+                  "auth_chain_a", "auth_chain_b"}
+_SSR_OBFS = {"plain", "http_simple", "http_post", "tls1.2_ticket_auth",
+             "tls1.2_ticket_fastauth", "random_head"}
+_HTTP_OPTIONS = {"sni", "insecure", "allowInsecure"}
+_BANDWIDTH = re.compile(r"[0-9]{1,9}(?: ?[kKmMgGtT]?bps)?")
+_PORT_RANGES = re.compile(r"[0-9]{1,5}(?:-[0-9]{1,5})?(?:,[0-9]{1,5}(?:-[0-9]{1,5})?)*")
+_SHA256_PIN = re.compile(r"(?:[0-9a-fA-F]{2}:?){31}[0-9a-fA-F]{2}")
+_WG_USERINFO = re.compile(r"^(wireguard://)([^@?#]+)@", re.IGNORECASE)
 
 
 class FormatError(ValueError):
@@ -213,11 +251,20 @@ def _display_name(value: str, fallback: str) -> str:
 
 
 def _link(scheme: str, auth: str | None, server: str, port: int,
-          query: dict[str, str], name: str, *, slash: bool = False) -> str:
-    userinfo = quote(auth, safe="") + "@" if auth is not None else ""
+          query: dict[str, str], name: str, *, slash: bool = False,
+          encoded_auth: str | None = None) -> str:
+    if encoded_auth is not None:
+        userinfo = encoded_auth + "@"
+    else:
+        userinfo = quote(auth, safe="") + "@" if auth is not None else ""
     suffix = "?" + urlencode(sorted(query.items()), quote_via=quote) if query else ""
     path = "/" if slash else ""
     return f"{scheme}://{userinfo}{_authority(server, port)}{path}{suffix}#{quote(name, safe='')}"
+
+
+def _userinfo(*fields: str) -> str:
+    """Percent-encode each field but keep the ':' separator for uuid:password style links."""
+    return ":".join(quote(field, safe="") for field in fields)
 
 
 def _record(protocol: str, name: str, server: str, port: int,
@@ -230,11 +277,37 @@ def _record(protocol: str, name: str, server: str, port: int,
     }
 
 
+def _canonical_uuid(token: str) -> str | None:
+    """Canonical dashed UUID for any standard form, or None when it is not a UUID."""
+    try:
+        return str(uuid.UUID(token))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
 def _uuid(value: object) -> str:
     token = _text(value, "UUID")
-    if not _UUID.fullmatch(token):
+    canonical = _canonical_uuid(token)
+    if canonical is None:
         raise FormatError("UUID must use the 8-4-4-4-12 hexadecimal form.")
-    return str(uuid.UUID(token))
+    return canonical
+
+
+def _proxy_id(value: object, label: str) -> str:
+    """Return a canonical UUID, or a custom 1-30 byte ID kept verbatim.
+
+    The bundled Mihomo maps non-UUID IDs through ``utils.UUIDMap`` (UUIDv5)
+    for both VLESS and VMess (matching Xray issue #158), so the string itself
+    is the portable identity. The 30-byte bound follows Xray's custom-ID
+    limit so canonical links keep working in v2rayN.
+    """
+    token = _text(value, label)
+    canonical = _canonical_uuid(token)
+    if canonical is not None:
+        return canonical
+    if len(token.encode("utf-8")) > _CUSTOM_ID_BYTES:
+        raise FormatError(f"{label} must be a UUID or a custom string of at most 30 bytes.")
+    return token
 
 
 def _http_host(value: str) -> str:
@@ -277,6 +350,25 @@ def _ws_path(value: str) -> str:
     return value
 
 
+def _http_hosts(value: str) -> list[str]:
+    """Hosts for TCP HTTP header obfuscation; an empty value keeps Mihomo's default."""
+    if not value:
+        return []
+    hosts = value.split(",")
+    if any(not item for item in hosts):
+        raise FormatError("HTTP header hosts must be a comma-separated list of nonempty values.")
+    return [_http_host(item) for item in hosts]
+
+
+def _http_paths(value: str) -> list[str]:
+    paths = value.split(",") if value else ["/"]
+    for item in paths:
+        if (not item.startswith("/") or item.startswith("//") or "#" in item
+                or _BAD_ESCAPE.search(item) or any(char.isspace() for char in item)):
+            raise FormatError("HTTP header paths must be comma-separated escaped absolute paths.")
+    return paths
+
+
 def _stream(proxy: dict, options: dict[str, str], protocol: str) -> None:
     for key in ("security", "type", "sni", "alpn", "fp"):
         if key in options and not options[key]:
@@ -300,8 +392,16 @@ def _stream(proxy: dict, options: dict[str, str], protocol: str) -> None:
     for key in ("spx", "pqv", "ech", "pcs", "vcn"):
         if options.get(key):
             raise FormatError(f"Nonempty {key} cannot be faithfully converted to Mihomo.")
-    if options.get("headerType", "none") not in ("", "none"):
-        raise FormatError("TCP/header obfuscation is not supported.")
+    header = options.get("headerType") or "none"
+    if header not in ("none", "http"):
+        raise FormatError("Only HTTP header obfuscation can be converted to Mihomo.")
+    if header == "http":
+        if network != "tcp":
+            raise FormatError("HTTP header obfuscation only applies to the TCP transport.")
+        if protocol == "trojan":
+            raise FormatError("Mihomo Trojan has no HTTP header obfuscation.")
+    if "headerType" in options:
+        options["headerType"] = header
     insecure = _boolean(options.get("allowInsecure", "0"), "Certificate verification flag")
     if "allowInsecure" in options:
         options["allowInsecure"] = "1" if insecure else "0"
@@ -354,9 +454,21 @@ def _stream(proxy: dict, options: dict[str, str], protocol: str) -> None:
     if flow:
         if flow != "xtls-rprx-vision" or network != "tcp" or not tls:
             raise FormatError("Only xtls-rprx-vision over TLS/Reality TCP is supported.")
+        if header == "http":
+            raise FormatError("xtls-rprx-vision cannot be combined with HTTP header obfuscation.")
         proxy["flow"] = flow
     if network == "tcp":
-        if any(options.get(key) for key in ("host", "path", "serviceName", "authority", "mode")):
+        if header == "http":
+            if any(options.get(key) for key in ("serviceName", "authority", "mode")):
+                raise FormatError("gRPC options cannot be applied to HTTP header obfuscation.")
+            # Xray "tcp + http header" is Mihomo's http transport (TLS, if any, stays outside).
+            proxy["network"] = "http"
+            http_opts = {"method": "GET", "path": _http_paths(options.get("path", ""))}
+            hosts = _http_hosts(options.get("host", ""))
+            if hosts:
+                http_opts["headers"] = {"Host": hosts}
+            proxy["http-opts"] = http_opts
+        elif any(options.get(key) for key in ("host", "path", "serviceName", "authority", "mode")):
             raise FormatError("Transport options cannot be applied to plain TCP.")
     elif network == "ws":
         if any(options.get(key) for key in ("serviceName", "authority", "mode")):
@@ -389,7 +501,7 @@ def _parse_standard(uri: str, protocol: str) -> dict:
                      else _STREAM_OPTIONS, aliases=True)
     proxy = {"type": protocol, "server": server, "port": port, "udp": True}
     if protocol == "vless":
-        password = _uuid(password)
+        password = _proxy_id(password, "VLESS ID")
         if options.get("encryption", "none") != "none":
             raise FormatError("Only VLESS encryption=none is supported by this adapter.")
         proxy["uuid"] = password
@@ -444,7 +556,7 @@ def _parse_vmess(uri: str) -> dict:
         raise FormatError("Only VMess share JSON version 2 is supported.")
     server = _hostname(data.get("add"))
     port = _integer(data.get("port"), "Port", 1, 65535)
-    identifier = _uuid(data.get("id"))
+    identifier = _proxy_id(data.get("id"), "VMess id")
     alter_id = _integer(data.get("aid", 0), "VMess alterId", 0, 65535)
     for key in _VMESS_FIELDS - {"port", "aid", "v", "insecure", "allowInsecure"}:
         if key in data:
@@ -482,7 +594,8 @@ def _parse_vmess(uri: str) -> dict:
     canonical_data = {
         "v": "2", "ps": name, "add": server, "port": port, "id": identifier,
         "aid": alter_id, "scy": cipher, "net": options["type"],
-        "type": options.get("mode", "none"),
+        "type": (options.get("mode", "none") if options["type"] == "grpc"
+                 else options.get("headerType", "none")),
         "host": data.get("host", ""), "path": data.get("path", ""),
         "tls": "tls" if proxy["tls"] else "",
         "insecure": "1" if insecure else "0",
@@ -663,6 +776,380 @@ def _parse_ss(uri: str) -> dict:
     return _record("ss", name, server, port, canonical, proxy)
 
 
+def _compact(options: dict[str, str]) -> dict[str, str]:
+    """Drop empty query values so ``key=`` behaves like an absent key."""
+    return {key: value for key, value in options.items() if value != ""}
+
+
+def _flag(options: dict[str, str], *keys: str) -> bool:
+    """Read one boolean from alias keys and remove them from the canonical query."""
+    present = [key for key in keys if key in options]
+    if len(present) > 1:
+        raise FormatError("Repeated or conflicting query option.")
+    if not present:
+        return False
+    value = _boolean(options.pop(present[0]), "Certificate verification flag")
+    return value
+
+
+def _alpn_list(value: str) -> list[str]:
+    alpn = value.split(",")
+    if any(not item or len(item.encode("utf-8")) > 255 or not item.isascii()
+           or any(char.isspace() for char in item) for item in alpn):
+        raise FormatError("ALPN must be a comma-separated list of nonempty ASCII tokens.")
+    if len(set(alpn)) != len(alpn):
+        raise FormatError("Repeated ALPN token.")
+    return alpn
+
+
+def _port_ranges(value: str) -> str:
+    if not _PORT_RANGES.fullmatch(value):
+        raise FormatError("Port hopping ranges must be comma-separated ports or ranges.")
+    for item in value.split(","):
+        bounds = [int(part) for part in item.split("-")]
+        if any(not 1 <= bound <= 65535 for bound in bounds) or bounds != sorted(bounds):
+            raise FormatError("Port hopping ranges must be comma-separated ports or ranges.")
+    return value
+
+
+def _bandwidth(value: str) -> str:
+    if not _BANDWIDTH.fullmatch(value):
+        raise FormatError("Bandwidth must be a number optionally followed by bps units.")
+    return value
+
+
+def _split_auth(auth: str | None, user_label: str, password_label: str) -> tuple[str, str]:
+    if auth is None or ":" not in auth:
+        raise FormatError(f"{user_label} and {password_label} are both required before @.")
+    raw_user, raw_password = auth.split(":", 1)
+    return (_text(_decode(raw_user, user_label), user_label),
+            _text(_decode(raw_password, password_label), password_label))
+
+
+def _parse_hysteria2(uri: str) -> dict:
+    parts, auth, server, port = _split_uri(uri)
+    if auth is None:
+        raise FormatError("Authentication is required.")
+    password = _text(_decode(auth, "Hysteria2 password"), "Hysteria2 password")
+    options = _compact(_query(parts.query, _HYSTERIA2_OPTIONS))
+    proxy = {"type": "hysteria2", "server": server, "port": port, "password": password}
+    if _flag(options, "insecure"):
+        proxy["skip-cert-verify"] = True
+        options["insecure"] = "1"
+    if "sni" in options:
+        options["sni"] = proxy["sni"] = _hostname(options["sni"])
+    if "obfs" in options or "obfs-password" in options:
+        if options.get("obfs") != "salamander" or not options.get("obfs-password"):
+            raise FormatError("Hysteria2 obfs must be salamander with an obfs-password.")
+        proxy["obfs"], proxy["obfs-password"] = "salamander", options["obfs-password"]
+    if "pinSHA256" in options:
+        if not _SHA256_PIN.fullmatch(options["pinSHA256"]):
+            raise FormatError("Hysteria2 pinSHA256 must be a SHA-256 hex fingerprint.")
+        proxy["fingerprint"] = options["pinSHA256"]
+    if "alpn" in options:
+        proxy["alpn"] = _alpn_list(options["alpn"])
+    for key in ("up", "down"):
+        if key in options:
+            proxy[key] = _bandwidth(options[key])
+    if "mport" in options and "ports" in options:
+        raise FormatError("Repeated or conflicting query option.")
+    ports = options.pop("ports", None) or options.pop("mport", None)
+    if ports:
+        options["mport"] = proxy["ports"] = _port_ranges(ports)
+    name = _display_name(_decode(parts.fragment, "Name"), _authority(server, port))
+    return _record("hysteria2", name, server, port,
+                   _link("hysteria2", password, server, port, options, name), proxy)
+
+
+def _parse_hysteria(uri: str) -> dict:
+    parts, auth, server, port = _split_uri(uri)
+    if auth is not None:
+        raise FormatError("Hysteria v1 links carry credentials in the auth query option.")
+    options = _compact(_query(parts.query, _HYSTERIA_OPTIONS))
+    protocol = options.get("protocol", "udp")
+    if protocol not in {"udp", "wechat-video", "faketcp"}:
+        raise FormatError("Hysteria protocol must be udp, wechat-video, or faketcp.")
+    proxy = {"type": "hysteria", "server": server, "port": port, "protocol": protocol}
+    if "auth" in options:
+        proxy["auth-str"] = options["auth"]
+    if "peer" in options:
+        options["peer"] = proxy["sni"] = _hostname(options["peer"])
+    if _flag(options, "insecure"):
+        proxy["skip-cert-verify"] = True
+        options["insecure"] = "1"
+    for key, target in (("upmbps", "up"), ("downmbps", "down")):
+        if key in options:
+            proxy[target] = str(_integer(options[key], f"Hysteria {key}", 1, 1_000_000))
+    if "alpn" in options:
+        proxy["alpn"] = _alpn_list(options["alpn"])
+    if "obfs" in options or "obfsParam" in options:
+        if options.get("obfs", "xplus") != "xplus" or not options.get("obfsParam"):
+            raise FormatError("Hysteria obfs must be xplus with an obfsParam password.")
+        options["obfs"], proxy["obfs"] = "xplus", options["obfsParam"]
+    name = _display_name(_decode(parts.fragment, "Name"), _authority(server, port))
+    return _record("hysteria", name, server, port,
+                   _link("hysteria", None, server, port, options, name), proxy)
+
+
+def _parse_tuic(uri: str) -> dict:
+    parts, auth, server, port = _split_uri(uri)
+    if auth is None or ":" not in auth:
+        raise FormatError("TUIC links must use the v5 uuid:password form.")
+    raw_uuid, raw_password = auth.split(":", 1)
+    identifier = _uuid(_decode(raw_uuid, "UUID"))
+    password = _text(_decode(raw_password, "TUIC password"), "TUIC password")
+    options = _compact(_query(parts.query, _TUIC_OPTIONS))
+    proxy = {"type": "tuic", "server": server, "port": port, "uuid": identifier,
+             "password": password}
+    congestion = options.get("congestion_control", "cubic")
+    if congestion not in {"cubic", "new_reno", "bbr"}:
+        raise FormatError("TUIC congestion control must be cubic, new_reno, or bbr.")
+    relay = options.get("udp_relay_mode", "native")
+    if relay not in {"native", "quic"}:
+        raise FormatError("TUIC UDP relay mode must be native or quic.")
+    proxy["congestion-controller"], proxy["udp-relay-mode"] = congestion, relay
+    proxy["alpn"] = _alpn_list(options["alpn"]) if "alpn" in options else ["h3"]
+    if "sni" in options:
+        options["sni"] = proxy["sni"] = _hostname(options["sni"])
+    if _flag(options, "allow_insecure", "insecure", "allowInsecure"):
+        proxy["skip-cert-verify"] = True
+        options["allow_insecure"] = "1"
+    if _flag(options, "disable_sni"):
+        proxy["disable-sni"] = True
+        options["disable_sni"] = "1"
+    name = _display_name(_decode(parts.fragment, "Name"), _authority(server, port))
+    canonical = _link("tuic", None, server, port, options, name,
+                      encoded_auth=_userinfo(identifier, password))
+    return _record("tuic", name, server, port, canonical, proxy)
+
+
+def _parse_anytls(uri: str) -> dict:
+    parts, auth, server, port = _split_uri(uri)
+    if auth is None:
+        raise FormatError("Authentication is required.")
+    password = _text(_decode(auth, "AnyTLS password"), "AnyTLS password")
+    options = _compact(_query(parts.query, _ANYTLS_OPTIONS))
+    proxy = {"type": "anytls", "server": server, "port": port, "password": password,
+             "udp": True}
+    if "sni" in options:
+        options["sni"] = proxy["sni"] = _hostname(options["sni"])
+    if _flag(options, "insecure", "allowInsecure"):
+        proxy["skip-cert-verify"] = True
+        options["insecure"] = "1"
+    if "alpn" in options:
+        proxy["alpn"] = _alpn_list(options["alpn"])
+    if "fp" in options:
+        if options["fp"] not in _FINGERPRINTS:
+            raise FormatError("Unsupported TLS client fingerprint.")
+        proxy["client-fingerprint"] = options["fp"]
+    name = _display_name(_decode(parts.fragment, "Name"), _authority(server, port))
+    return _record("anytls", name, server, port,
+                   _link("anytls", password, server, port, options, name), proxy)
+
+
+def _wg_key(value: str, label: str) -> str:
+    _text(value, label)
+    if len(_b64_bytes(value, label)) != 32:
+        raise FormatError("WireGuard keys must be 32-byte Base64.")
+    return base64.b64encode(_b64_bytes(value, label)).decode("ascii")
+
+
+def _parse_wireguard(uri: str) -> dict:
+    # v2rayN percent-encodes the Base64 key before "@"; tolerate raw "/" and "+" too.
+    match = _WG_USERINFO.match(uri)
+    if match:
+        uri = match[1] + quote(unquote(match[2]), safe="") + uri[match.end() - 1:]
+    parts, auth, server, port = _split_uri(uri)
+    if auth is None:
+        raise FormatError("WireGuard links require the private key before @.")
+    private_key = _wg_key(_decode(auth, "WireGuard private key"), "WireGuard private key")
+    options = _compact(_query(parts.query, _WIREGUARD_OPTIONS))
+    if any(key in options for key in ("wnoise", "wnoisecount", "wpayloadsize", "wnoisedelay")):
+        raise FormatError("WireGuard noise options cannot be converted to Mihomo.")
+    public_key = _wg_key(options.get("publickey", ""), "WireGuard public key")
+    proxy = {"type": "wireguard", "server": server, "port": port,
+             "private-key": private_key, "public-key": public_key, "udp": True}
+    options["publickey"] = public_key
+    if "presharedkey" in options:
+        options["presharedkey"] = proxy["pre-shared-key"] = _wg_key(
+            options["presharedkey"], "WireGuard pre-shared key")
+    addresses = {}
+    for item in options.get("address", "").split(","):
+        try:
+            interface = ipaddress.ip_interface(item) if item else None
+        except ValueError:
+            interface = None
+        if interface is None or interface.version in addresses:
+            raise FormatError("WireGuard address must list one IPv4 and/or one IPv6 interface address.")
+        addresses[interface.version] = (
+            str(interface.ip) if interface.network.prefixlen == interface.max_prefixlen
+            else str(interface)
+        )
+    if 4 in addresses:
+        proxy["ip"] = addresses[4]
+    if 6 in addresses:
+        proxy["ipv6"] = addresses[6]
+    options["address"] = ",".join(addresses[version] for version in sorted(addresses))
+    if "reserved" in options:
+        fields = options["reserved"].split(",")
+        if len(fields) != 3 or not all(re.fullmatch(r"[0-9]{1,3}", field) and int(field) <= 255
+                                       for field in fields):
+            raise FormatError("WireGuard reserved must be three comma-separated bytes.")
+        proxy["reserved"] = [int(field) for field in fields]
+        options["reserved"] = ",".join(str(field) for field in proxy["reserved"])
+    if "mtu" in options:
+        proxy["mtu"] = _integer(options["mtu"], "WireGuard MTU", 576, 65535)
+        options["mtu"] = str(proxy["mtu"])
+    name = _display_name(_decode(parts.fragment, "Name"), _authority(server, port))
+    return _record("wireguard", name, server, port,
+                   _link("wireguard", private_key, server, port, options, name), proxy)
+
+
+def _parse_mieru(uri: str) -> dict:
+    parts, auth, server, port = _split_uri(uri)
+    username, password = _split_auth(auth, "Mieru username", "Mieru password")
+    options = _compact(_query(parts.query, _MIERU_OPTIONS))
+    if options.get("transport", "TCP").upper() != "TCP":
+        raise FormatError("Mihomo Mieru only supports the TCP transport.")
+    proxy = {"type": "mieru", "server": server, "port": port, "transport": "TCP",
+             "username": username, "password": password}
+    canonical = {}
+    if "multiplexing" in options:
+        if options["multiplexing"] not in _MIERU_MULTIPLEXING:
+            raise FormatError("Mieru multiplexing must be MULTIPLEXING_OFF, LOW, MIDDLE, or HIGH.")
+        canonical["multiplexing"] = proxy["multiplexing"] = options["multiplexing"]
+    if "mtu" in options and _integer(options["mtu"], "Mieru MTU", 576, 65535) != 1400:
+        raise FormatError("Mieru MTU other than the default 1400 cannot be converted to Mihomo.")
+    fallback = _display_name(options.get("profile", ""), _authority(server, port))
+    name = _display_name(_decode(parts.fragment, "Name"), fallback)
+    return _record("mieru", name, server, port,
+                   _link("mierus", None, server, port, canonical, name,
+                         encoded_auth=_userinfo(username, password)), proxy)
+
+
+def _parse_trojan_go(uri: str) -> dict:
+    parts, auth, server, port = _split_uri(uri)
+    if auth is None:
+        raise FormatError("Authentication is required.")
+    password = _text(_decode(auth, "Trojan password"), "Trojan password")
+    options = _compact(_query(parts.query, _TROJAN_GO_OPTIONS))
+    if "plugin" in options:
+        raise FormatError("Trojan-Go plugins cannot be converted to Mihomo.")
+    kind = options.get("type", "original")
+    if kind not in {"original", "ws"}:
+        raise FormatError("Trojan-Go type must be original or ws.")
+    proxy = {"type": "trojan", "server": server, "port": port, "password": password,
+             "udp": True, "skip-cert-verify": False}
+    if "sni" in options:
+        options["sni"] = proxy["sni"] = _hostname(options["sni"])
+    if kind == "ws":
+        proxy["network"] = "ws"
+        ws = {"path": _ws_path(options.get("path", "/"))}
+        if "host" in options:
+            ws["headers"] = {"Host": _http_host(options["host"])}
+        proxy["ws-opts"] = ws
+    elif "host" in options or "path" in options:
+        raise FormatError("Transport options cannot be applied to plain TCP.")
+    if "encryption" in options:
+        fields = options["encryption"].split(";")
+        if len(fields) != 3 or fields[0] != "ss" or fields[1].lower() not in _TROJAN_GO_CIPHERS or not fields[2]:
+            raise FormatError("Trojan-Go encryption must be ss;method;password with an AEAD method.")
+        proxy["ss-opts"] = {"enabled": True, "method": fields[1].lower(), "password": fields[2]}
+        options["encryption"] = ";".join(("ss", fields[1].lower(), fields[2]))
+    name = _display_name(_decode(parts.fragment, "Name"), _authority(server, port))
+    return _record("trojan-go", name, server, port,
+                   _link("trojan-go", password, server, port, options, name), proxy)
+
+
+def _ssr_link(server: str, port: int, protocol: str, cipher: str, obfs: str,
+              password: str, obfs_param: str, protocol_param: str, name: str) -> str:
+    params = {"remarks": name}
+    if obfs_param:
+        params["obfsparam"] = obfs_param
+    if protocol_param:
+        params["protoparam"] = protocol_param
+    query = "&".join(f"{key}={_b64_encode(value, urlsafe=True)}" for key, value in sorted(params.items()))
+    main = f"{server}:{port}:{protocol}:{cipher}:{obfs}:{_b64_encode(password, urlsafe=True)}"
+    return "ssr://" + _b64_encode(main + "/?" + query, urlsafe=True)
+
+
+def _parse_ssr(uri: str) -> dict:
+    body, _, fragment = uri.partition("://")[2].partition("#")
+    decoded = _b64_text(body, "SSR payload")
+    main, _, params = decoded.partition("/?")
+    fields = main.rsplit(":", 5)
+    if len(fields) != 6 or not all(fields[:5]):
+        raise FormatError("SSR payload must be host:port:protocol:method:obfs:password.")
+    host, raw_port, protocol, cipher, obfs, raw_password = fields
+    server = _hostname(host.strip("[]"))
+    port = _integer(raw_port, "Port", 1, 65535)
+    protocol, cipher, obfs = protocol.lower(), cipher.lower(), obfs.lower()
+    if cipher not in _SSR_CIPHERS:
+        raise FormatError("Unsupported SSR cipher.")
+    if protocol not in _SSR_PROTOCOLS:
+        raise FormatError("Unsupported SSR protocol.")
+    if obfs not in _SSR_OBFS:
+        raise FormatError("Unsupported SSR obfs.")
+    password = _text(_b64_text(raw_password, "SSR password") if raw_password else "", "SSR password")
+    extras = {}
+    for pair in filter(None, params.split("&")):
+        key, _, value = pair.partition("=")
+        if key not in {"obfsparam", "protoparam", "remarks", "group"} or key in extras:
+            raise FormatError("Unsupported query option; refusing lossy conversion.")
+        extras[key] = _b64_text(value, "SSR option") if value else ""
+    proxy = {"type": "ssr", "server": server, "port": port, "cipher": cipher,
+             "password": password, "obfs": obfs, "protocol": protocol, "udp": True}
+    if extras.get("obfsparam"):
+        proxy["obfs-param"] = _text(extras["obfsparam"], "SSR option")
+    if extras.get("protoparam"):
+        proxy["protocol-param"] = _text(extras["protoparam"], "SSR option")
+    fallback = _display_name(extras.get("remarks", ""), _authority(server, port))
+    name = _display_name(_decode(fragment, "Name"), fallback)
+    canonical = _ssr_link(server, port, protocol, cipher, obfs, password,
+                          extras.get("obfsparam", ""), extras.get("protoparam", ""), name)
+    return _record("ssr", name, server, port, canonical, proxy)
+
+
+def _parse_ssh(uri: str) -> dict:
+    parts, auth, server, port = _split_uri(uri)
+    username, password = _split_auth(auth, "SSH username", "SSH password")
+    _query(parts.query, set())
+    proxy = {"type": "ssh", "server": server, "port": port, "username": username,
+             "password": password}
+    name = _display_name(_decode(parts.fragment, "Name"), _authority(server, port))
+    return _record("ssh", name, server, port,
+                   _link("ssh", None, server, port, {}, name,
+                         encoded_auth=_userinfo(username, password)), proxy)
+
+
+def _parse_http(uri: str, scheme: str) -> dict:
+    try:
+        if urlsplit(uri).path not in ("", "/"):
+            raise FormatError("HTTP proxy links cannot contain a path; remote subscriptions are not fetched.")
+    except ValueError:
+        raise FormatError("Malformed URI authority or bracketed IPv6 address.") from None
+    parts, auth, server, port = _split_uri(uri)
+    options = _compact(_query(parts.query, _HTTP_OPTIONS))
+    tls = scheme == "https"
+    proxy = {"type": "http", "server": server, "port": port, "tls": tls}
+    encoded_auth = None
+    if auth is not None:
+        username, password = _split_auth(auth, "HTTP proxy username", "HTTP proxy password")
+        proxy.update(username=username, password=password)
+        encoded_auth = _userinfo(username, password)
+    if tls:
+        if "sni" in options:
+            options["sni"] = proxy["sni"] = _hostname(options["sni"])
+        if _flag(options, "insecure", "allowInsecure"):
+            proxy["skip-cert-verify"] = True
+            options["insecure"] = "1"
+    elif options:
+        raise FormatError("TLS options require TLS; refusing to ignore them.")
+    name = _display_name(_decode(parts.fragment, "Name"), _authority(server, port))
+    return _record("http", name, server, port,
+                   _link(scheme, None, server, port, options, name, encoded_auth=encoded_auth), proxy)
+
+
 def parse_uri(uri: str) -> dict:
     """Parse one share URI; reject malformed or lossy security/transport options.
 
@@ -688,7 +1175,27 @@ def parse_uri(uri: str) -> dict:
         return _parse_socks(uri)
     if scheme == "ss":
         return _parse_ss(uri)
-    raise FormatError("Unsupported protocol; expected VLESS, VMess, SOCKS5, Trojan, or Shadowsocks.")
+    if scheme in {"hysteria2", "hy2"}:
+        return _parse_hysteria2(uri)
+    if scheme == "hysteria":
+        return _parse_hysteria(uri)
+    if scheme == "tuic":
+        return _parse_tuic(uri)
+    if scheme == "anytls":
+        return _parse_anytls(uri)
+    if scheme == "wireguard":
+        return _parse_wireguard(uri)
+    if scheme == "mierus":
+        return _parse_mieru(uri)
+    if scheme == "trojan-go":
+        return _parse_trojan_go(uri)
+    if scheme == "ssr":
+        return _parse_ssr(uri)
+    if scheme == "ssh":
+        return _parse_ssh(uri)
+    if scheme in {"http", "https"}:
+        return _parse_http(uri, scheme)
+    raise FormatError("Unsupported share URI scheme.")
 
 
 def _identity(node: dict) -> str:
@@ -833,7 +1340,11 @@ def export_clash(nodes: list[dict], test_url: str = "https://www.gstatic.com/gen
 
 def _check_v2ray_compatibility(node: dict) -> None:
     proxy = node["clash"]
-    if proxy.get("skip-cert-verify"):
+    if node["protocol"] not in _V2RAYN_PROTOCOLS:
+        raise FormatError(f"{node['protocol']} nodes cannot be shared with v2rayN; use Clash export.")
+    # Hysteria2/TUIC/AnyTLS links carry their own insecure flag; the Xray proposal
+    # that removed allowInsecure only affects VLESS/VMess/Trojan/HTTP.
+    if proxy.get("skip-cert-verify") and node["protocol"] not in {"hysteria2", "tuic", "anytls"}:
         raise FormatError("Current Xray/v2rayN cannot preserve allowInsecure; use verified TLS.")
     plugin = proxy.get("plugin")
     if plugin == "obfs" and proxy["plugin-opts"]["mode"] != "http":
@@ -858,6 +1369,11 @@ def export_v2ray(nodes: list[dict]) -> str:
             data = _vmess_json(_b64_text(node["uri"].partition("://")[2], "VMess payload"))
             data["ps"] = node["name"]
             link = _vmess_link(data)
+        elif node["protocol"] == "ssr":
+            proxy = node["clash"]
+            link = _ssr_link(proxy["server"], proxy["port"], proxy["protocol"], proxy["cipher"],
+                             proxy["obfs"], proxy["password"], proxy.get("obfs-param", ""),
+                             proxy.get("protocol-param", ""), node["name"])
         else:
             link = node["uri"].partition("#")[0] + "#" + quote(node["name"], safe="")
         if len(link) > MAX_URI_LENGTH:

@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 
 from . import __version__
 from .dialogs import EditDialog, ImportDialog, PreviewDialog, RuleDialog, TestDetailDialog, confirm, error_dialog
-from .formats import export_clash, export_v2ray
+from .formats import PROTOCOLS, export_clash, export_v2ray
 from .messages import local_stamp, test_message
 from .paths import bundled_core, resource_root
 from .rules import RULE_ACTIONS, RULE_TYPES
@@ -253,7 +253,7 @@ class MainWindow(QMainWindow):
         secondary.addSpacing(10)
         self.protocol_filter = QComboBox()
         self.protocol_filter.addItem("全部协议", "")
-        for name in ("vless", "vmess", "socks5", "trojan", "ss"):
+        for name in PROTOCOLS:
             self.protocol_filter.addItem(name.upper(), name)
         self.protocol_filter.setFixedWidth(130)
         self.protocol_filter.setAccessibleName("协议筛选")

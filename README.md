@@ -43,18 +43,32 @@
 
 | 类型 | 已支持的常用配置 |
 | --- | --- |
-| VLESS | UUID、TCP / WebSocket / gRPC gun、TLS、Reality、Vision 的适用组合 |
-| VMess | Base64 JSON 分享格式、TCP / WebSocket / gRPC gun、TLS |
+| VLESS | UUID 或自定义 ID、TCP（含 HTTP 伪装）/ WebSocket / gRPC gun、TLS、Reality、Vision 的适用组合 |
+| VMess | Base64 JSON 分享格式（id 支持标准 UUID 各种写法与 ≤30 字节自定义字符串）、TCP（含 HTTP 伪装）/ WebSocket / gRPC gun、TLS |
 | SOCKS5 | `socks5://`、`socks://`、可选用户名密码、Base64 认证、IPv6 |
 | Trojan | TLS、TCP / WebSocket / gRPC gun |
+| Trojan-Go | `trojan-go://`：TLS、original / WebSocket、`ss;加密;密码` 加密层（插件不支持） |
 | Shadowsocks | 常用 AEAD、AEAD-2022、部分 obfs / v2ray-plugin 配置 |
+| SSR | 常用加密、协议与混淆插件，含 obfsparam / protoparam，备注作为名称 |
+| HTTP | `http://` 与 `https://` 代理，可选用户名密码；`https` 支持 sni / insecure |
+| Hysteria2 | `hysteria2://` 与 `hy2://`：密码、sni、insecure、salamander 混淆、ALPN、up / down、端口跳跃（mport）、证书指纹 |
+| Hysteria | v1：auth、peer、insecure、upmbps / downmbps、ALPN、xplus 混淆 |
+| TUIC | v5 `uuid:password`：拥塞控制、UDP 中继模式、ALPN、sni、insecure、disable_sni |
+| AnyTLS | 密码、sni、insecure、ALPN、客户端指纹 |
+| WireGuard | v2rayN 格式：私钥 / 公钥 / 预共享密钥、address、reserved、mtu |
+| Mieru | `mierus://用户名:密码@…`：multiplexing、TCP 传输（profile 作为默认名称） |
+| SSH | `ssh://用户名:密码@…`（仅密码认证） |
 
 Clash 输出是完整 Mihomo YAML，含手动选择、自动测速分组、订阅规则和 `MATCH` 兜底规则。
 v2rayN 输出为 Base64 节点列表；SOCKS5 转为客户端识别的 `socks://` 格式。
+v2rayN 订阅只能包含它能表达的协议（VLESS、VMess、Trojan、Shadowsocks、SSR、SOCKS5、HTTP、
+Hysteria2、TUIC、AnyTLS、WireGuard）；启用了 Hysteria v1、Mieru、Trojan-Go 或 SSH 节点时，
+v2rayN 订阅会明确报错，请改用 Clash 订阅，或在节点列表里关闭这些节点的"订阅"开关。
 不同客户端不能完整表达的配置会明确报错，不会悄悄省略安全或传输参数。
 
-当前未覆盖：Hysteria2、TUIC、SSR、XHTTP、KCP、部分旧 VMess 分享格式、
-自定义非 UUID 的 VLESS ID、新式 VLESS 加密以及所有厂商私有参数。
+当前未覆盖：Snell、XHTTP、KCP、部分旧 VMess 分享格式、新式 VLESS 加密、
+WireGuard 噪声参数、Mieru 的 UDP 传输与非默认 MTU、Trojan-Go 插件以及所有厂商私有参数。
+HTTP 伪装的 host 可省略，省略时使用 Mihomo 的默认值（以服务器地址作为 Host）。
 完整边界见 [协议兼容说明](docs/protocol-research.md)。
 本程序不抓取远程订阅地址，不把节点发送到在线转换网站。
 
@@ -104,7 +118,7 @@ Clash 订阅会带上“订阅规则”页面里管理的规则，按列表顺�
 - **更新订阅失败**：确认程序窗口已打开、左下角服务已开启、客户端直连
   `127.0.0.1`，且链接令牌与端口没有变更。
 - **没有启用节点**：服务返回明确错误，不生成可能误导客户端的空配置。
-- **链接检查失败**：查看具体行号；可只导入检查通过的项目。
+- **链接检查失败**：查看具体行号和中文提示；可只导入检查通过的项目。
   不支持的参数需在来源处确认，不建议直接删除安全参数。
 - **复制链接后改名**：请在客户端重新刷新订阅以更新名称。
 - **Windows 提示未签名**：此本地构建没有商业代码签名。不要关闭安全软件；

@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from .formats import MAX_BATCH_LENGTH, FormatError, parse_batch, parse_uri
-from .messages import local_stamp, test_message
+from .messages import format_message, local_stamp, test_message
 from .rules import NO_RESOLVE_TYPES, RULE_ACTIONS, RULE_HINTS, RULE_TYPES, RuleError, render_rule, validate_rule
 from .theme import GREEN, MUTED, RED
 from .widgets import button, divider, icon_button, label
@@ -65,7 +65,8 @@ class ImportDialog(QDialog):
         layout.setContentsMargins(26, 22, 26, 22)
         layout.setSpacing(16)
         layout.addWidget(label("导入节点", "sectionTitle"))
-        layout.addWidget(label("VLESS  /  VMess  /  SOCKS5  /  Trojan  /  Shadowsocks", "small"))
+        layout.addWidget(label("VLESS / VMess / Trojan / Trojan-Go / Shadowsocks / SSR / SOCKS5 / HTTP\n"
+                               "Hysteria2 / Hysteria / TUIC / AnyTLS / WireGuard / Mieru / SSH", "small"))
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, 1)
         link_page = QWidget()
@@ -84,7 +85,7 @@ class ImportDialog(QDialog):
         self.text = QPlainTextEdit()
         self.text.setObjectName("importText")
         self.text.setAccessibleName("节点链接")
-        self.text.setPlaceholderText("vless://...\nvmess://...\nsocks5://...")
+        self.text.setPlaceholderText("vless://...\nhysteria2://...\ntuic://...")
         self.text.setMinimumHeight(155)
         self.text.textChanged.connect(self.invalidate)
         links.addWidget(self.text, 1)
@@ -195,14 +196,14 @@ class ImportDialog(QDialog):
                 f"{count} 个可导入  ·  {self.duplicate_count} 个重复  ·  {len(failures)} 个错误"
             )
             self.errors.setPlainText("\n".join(
-                f"第 {item['line']} 行：{item['message']}" for item in failures
+                f"第 {item['line']} 行：{format_message(item['message'])}" for item in failures
             ))
             self.errors.setVisible(bool(failures))
             self.import_button.setEnabled(count > 0)
             self.import_button.setText(f"导入 {count} 个节点" if count else "导入")
         except (ValueError, TypeError) as error:
             self.summary.setText("检查未通过")
-            self.errors.setPlainText(str(error))
+            self.errors.setPlainText(format_message(str(error)))
             self.errors.show()
             self.import_button.setEnabled(False)
 
