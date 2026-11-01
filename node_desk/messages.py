@@ -171,6 +171,7 @@ _FORMAT_MESSAGES = {
     "Unsupported share URI scheme.": "不支持的链接类型。支持：VLESS、VMess、Trojan、Trojan-Go、Shadowsocks、SSR、SOCKS5、HTTP、Hysteria2、Hysteria、TUIC、AnyTLS、WireGuard、Mieru、SSH。",
     "Hysteria2 obfs must be salamander with an obfs-password.": "Hysteria2 的 obfs 只能是 salamander，且必须带 obfs-password。",
     "Hysteria2 pinSHA256 must be a SHA-256 hex fingerprint.": "Hysteria2 的 pinSHA256 必须是 SHA-256 十六进制指纹。",
+    "Hysteria2 always uses TLS; security must be tls.": "Hysteria2 固定使用 TLS，security 只能填 tls。",
     "Bandwidth must be a number optionally followed by bps units.": "带宽必须是数字（可带 Mbps 等单位）。",
     "Port hopping ranges must be comma-separated ports or ranges.": "端口跳跃范围必须是用逗号分隔的端口或区间（如 20000-30000）。",
     "Hysteria v1 links carry credentials in the auth query option.": "Hysteria v1 链接的认证信息应放在 auth 参数里，而不是 @ 之前。",

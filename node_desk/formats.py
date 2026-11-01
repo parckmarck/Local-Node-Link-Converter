@@ -73,7 +73,8 @@ _V2RAYN_PROTOCOLS = {
     "hysteria2", "tuic", "anytls", "wireguard",
 }
 _HYSTERIA2_OPTIONS = {"sni", "insecure", "allowInsecure", "allow_insecure", "obfs",
-                      "obfs-password", "pinSHA256", "alpn", "up", "down", "mport", "ports"}
+                      "obfs-password", "pinSHA256", "alpn", "up", "down", "mport", "ports",
+                      "security", "fp"}
 _HYSTERIA_OPTIONS = {"protocol", "auth", "peer", "insecure", "upmbps", "downmbps", "alpn",
                      "obfs", "obfsParam"}
 _TUIC_OPTIONS = {"congestion_control", "udp_relay_mode", "alpn", "sni", "allow_insecure",
@@ -848,6 +849,14 @@ def _parse_hysteria2(uri: str) -> dict:
     password = _text(_decode(auth, "Hysteria2 password"), "Hysteria2 password")
     options = _compact(_query(parts.query, _HYSTERIA2_OPTIONS))
     proxy = {"type": "hysteria2", "server": server, "port": port, "password": password}
+    # Xray-style TLS decorations some converters append to hysteria2 links.
+    # security=tls is redundant (hysteria2 is always TLS); a uTLS client
+    # fingerprint has no effect over QUIC. Both are validated and preserved in
+    # the canonical URI, but neither is mapped to Mihomo.
+    if "security" in options and options["security"] != "tls":
+        raise FormatError("Hysteria2 always uses TLS; security must be tls.")
+    if "fp" in options and options["fp"] not in _FINGERPRINTS:
+        raise FormatError("Unsupported TLS client fingerprint.")
     if _flag(options, "insecure", "allowInsecure", "allow_insecure"):
         proxy["skip-cert-verify"] = True
         options["insecure"] = "1"

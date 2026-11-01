@@ -102,13 +102,29 @@ class Hysteria2Tests(unittest.TestCase):
         with self.assertRaisesRegex(FormatError, r"Unsupported query option \(query parameter 1\)"):
             parse_uri(link("hysteria2", "pw", {"ech": "abc"}))
 
+    def test_xray_style_tls_decorations_are_tolerated(self):
+        # Converters often append security=tls and a uTLS fp to hysteria2 links.
+        # hysteria2 is always TLS and QUIC has no uTLS fingerprint, so both are
+        # validated and kept in the canonical URI without mapping to Mihomo.
+        node = parse_uri(link("hysteria2", "pw", {"security": "tls", "fp": "chrome",
+                                                  "sni": "tls.example"}))
+        self.assertEqual(node["clash"]["sni"], "tls.example")
+        self.assertNotIn("client-fingerprint", node["clash"])
+        self.assertNotIn("security", node["clash"])
+        query = parse_qs(urlsplit(node["uri"]).query)
+        self.assertEqual(query["security"], ["tls"])
+        self.assertEqual(query["fp"], ["chrome"])
+        round_trip(self, node)
+        v2ray_round_trip(self, node)
+
     def test_rejections(self):
         for auth, options in (
             (None, {}), ("pw", {"obfs": "salamander"}), ("pw", {"obfs-password": "x"}),
             ("pw", {"obfs": "none", "obfs-password": "x"}), ("pw", {"pinSHA256": "abc"}),
             ("pw", {"up": "fast"}), ("pw", {"mport": "30000-20000"}), ("pw", {"mport": "0-10"}),
-            ("pw", {"fp": "chrome"}), ("pw", {"insecure": "maybe"}),
-            ("pw", {"allowInsecure": "maybe"}),
+            ("pw", {"fp": "not-a-fingerprint"}), ("pw", {"insecure": "maybe"}),
+            ("pw", {"allowInsecure": "maybe"}), ("pw", {"security": "none"}),
+            ("pw", {"security": "reality"}),
             ("pw", {"mport": "1000", "ports": "2000"}), ("pw", {"alpn": "h3,h3"}),
         ):
             with self.subTest(auth=auth, options=options):
