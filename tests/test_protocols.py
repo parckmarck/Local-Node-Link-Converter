@@ -87,12 +87,28 @@ class Hysteria2Tests(unittest.TestCase):
         batch = parse_batch(link("hysteria2", "pw") + "\n" + link("hy2", "pw", name="Other"))
         self.assertEqual((len(batch["nodes"]), batch["duplicates"]), (1, 1))
 
+    def test_legacy_v2rayN_insecure_aliases(self):
+        # Older v2rayN releases emitted both insecure=1 and allowInsecure=1.
+        for options in ({"insecure": "1", "allowInsecure": "1"}, {"allowInsecure": "1"},
+                        {"allow_insecure": "true"}):
+            with self.subTest(options=options):
+                node = parse_uri(link("hysteria2", "pw", options))
+                self.assertTrue(node["clash"]["skip-cert-verify"])
+                self.assertEqual(parse_qs(urlsplit(node["uri"]).query)["insecure"], ["1"])
+                round_trip(self, node)
+                v2ray_round_trip(self, node)
+        with self.assertRaisesRegex(FormatError, "Repeated or conflicting"):
+            parse_uri(link("hysteria2", "pw", {"insecure": "1", "allowInsecure": "0"}))
+        with self.assertRaisesRegex(FormatError, r"Unsupported query option \(query parameter 1\)"):
+            parse_uri(link("hysteria2", "pw", {"ech": "abc"}))
+
     def test_rejections(self):
         for auth, options in (
             (None, {}), ("pw", {"obfs": "salamander"}), ("pw", {"obfs-password": "x"}),
             ("pw", {"obfs": "none", "obfs-password": "x"}), ("pw", {"pinSHA256": "abc"}),
             ("pw", {"up": "fast"}), ("pw", {"mport": "30000-20000"}), ("pw", {"mport": "0-10"}),
             ("pw", {"fp": "chrome"}), ("pw", {"insecure": "maybe"}),
+            ("pw", {"allowInsecure": "maybe"}),
             ("pw", {"mport": "1000", "ports": "2000"}), ("pw", {"alpn": "h3,h3"}),
         ):
             with self.subTest(auth=auth, options=options):

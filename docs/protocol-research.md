@@ -131,7 +131,7 @@ Credentials and query values are decoded exactly once.
 | Trojan-Go (1.5.0) | `trojan-go://password@host:port` with `sni`, `type=original|ws`, WS `host`/`path`, and `encryption=ss;<aead>;<password>` (Mihomo `ss-opts`); `plugin` is rejected. Exported to Clash only. |
 | SSR (1.5.0) | `ssr://` Base64URL payload `host:port:protocol:method:obfs:base64(password)/?obfsparam&protoparam&remarks&group`; common stream ciphers, `auth_*` protocols and `http_simple`/`tls1.2_ticket_auth`-style obfs; remarks become the name and are rewritten on export. |
 | HTTP (1.5.0) | `http://`/`https://[user:pass@]host:port`; `https` accepts `sni` and `insecure`. Paths are rejected so remote subscription URLs are not mistaken for proxies. |
-| Hysteria2 (1.5.0) | `hysteria2://`/`hy2://password@host:port` with `sni`, `insecure`, `obfs=salamander`+`obfs-password`, `pinSHA256`, `alpn`, `up`/`down`, and `mport`/`ports` port hopping (Mihomo `ports`). |
+| Hysteria2 (1.5.0) | `hysteria2://`/`hy2://password@host:port` with `sni`, `insecure` (also `allowInsecure`/`allow_insecure`; identical duplicate spellings are accepted because older v2rayN releases emitted both), `obfs=salamander`+`obfs-password`, `pinSHA256`, `alpn`, `up`/`down`, and `mport`/`ports` port hopping (Mihomo `ports`). |
 | Hysteria v1 (1.5.0) | `hysteria://host:port` with `protocol`, `auth`, `peer`, `insecure`, `upmbps`/`downmbps`, `alpn`, `obfs=xplus`+`obfsParam`. Clash export only. |
 | TUIC (1.5.0) | v5 `tuic://uuid:password@host:port` with `congestion_control`, `udp_relay_mode`, `alpn` (default h3), `sni`, `allow_insecure`, `disable_sni`; v4 token links are rejected. |
 | AnyTLS (1.5.0) | `anytls://password@host:port` with `sni`, `insecure`, `alpn`, `fp`. |

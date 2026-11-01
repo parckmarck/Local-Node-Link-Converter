@@ -229,6 +229,7 @@ _FORMAT_LABELS = {
 _FORMAT_PATTERNS = (
     (r"(\S+) nodes cannot be shared with v2rayN; use Clash export\.", "v2rayN 不支持 {0} 节点，请使用 Clash 订阅。"),
     (r"(\S+) nodes cannot be exported to sing-box; use the Clash subscription\.", "sing-box 不支持 {0} 节点，请使用 Clash 订阅。"),
+    (r"Unsupported query option \(query parameter (\d+)\); refusing lossy conversion\.", "链接含有不支持的参数（? 后第 {0} 个），为避免丢失配置已拒绝。"),
     (r"(.+) and (.+) are both required before @\.", "@ 之前必须同时写 {label} 和 {label2}。"),
     (r"(.+) must be a UUID or a custom string of at most 30 bytes\.", "{label} 必须是 UUID，或不超过 30 字节的自定义字符串。"),
     (r"Node (\d+) must be a record\.", "第 {0} 个节点的记录格式无效。"),

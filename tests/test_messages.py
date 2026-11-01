@@ -21,6 +21,9 @@ class FormatMessageTests(unittest.TestCase):
             format_message("Node 2: mieru nodes cannot be exported to sing-box; "
                            "use the Clash subscription."),
             "第 2 个节点：sing-box 不支持 mieru 节点，请使用 Clash 订阅。")
+        self.assertEqual(
+            format_message("Unsupported query option (query parameter 3); refusing lossy conversion."),
+            "链接含有不支持的参数（? 后第 3 个），为避免丢失配置已拒绝。")
 
     def test_label_patterns_and_nested_node_prefix(self):
         self.assertEqual(format_message("Port must be between 1 and 65535."), "端口必须在 1 到 65535 之间。")

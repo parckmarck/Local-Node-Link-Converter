@@ -72,8 +72,8 @@ _V2RAYN_PROTOCOLS = {
     "vless", "vmess", "trojan", "ss", "ssr", "socks5", "http",
     "hysteria2", "tuic", "anytls", "wireguard",
 }
-_HYSTERIA2_OPTIONS = {"sni", "insecure", "obfs", "obfs-password", "pinSHA256", "alpn",
-                      "up", "down", "mport", "ports"}
+_HYSTERIA2_OPTIONS = {"sni", "insecure", "allowInsecure", "allow_insecure", "obfs",
+                      "obfs-password", "pinSHA256", "alpn", "up", "down", "mport", "ports"}
 _HYSTERIA_OPTIONS = {"protocol", "auth", "peer", "insecure", "upmbps", "downmbps", "alpn",
                      "obfs", "obfsParam"}
 _TUIC_OPTIONS = {"congestion_control", "udp_relay_mode", "alpn", "sni", "allow_insecure",
@@ -234,14 +234,25 @@ def _query(query: str, allowed: set[str], *, aliases: bool = False) -> dict[str,
     except (ValueError, UnicodeError):
         raise FormatError("Malformed query or too many query options.") from None
     result = {}
-    for key, value in pairs:
+    sources = {}
+    for position, (key, value) in enumerate(pairs, 1):
+        original = key
         if aliases:
             key = _QUERY_ALIASES.get(key, key)
         if key not in allowed:
-            raise FormatError("Unsupported query option; refusing lossy conversion.")
+            # Identify the position only: option names are untrusted input and
+            # are never echoed into error messages.
+            raise FormatError(f"Unsupported query option (query parameter {position}); "
+                              "refusing lossy conversion.")
+        value = _text(value, "Query value", empty=True)
         if key in result:
+            # Older v2rayN links spell the same flag twice
+            # (insecure=1&allowInsecure=1); identical values are not a conflict.
+            if original != sources[key] and value == result[key]:
+                continue
             raise FormatError("Repeated or conflicting query option.")
-        result[key] = _text(value, "Query value", empty=True)
+        result[key] = value
+        sources[key] = original
     return result
 
 
@@ -782,14 +793,18 @@ def _compact(options: dict[str, str]) -> dict[str, str]:
 
 
 def _flag(options: dict[str, str], *keys: str) -> bool:
-    """Read one boolean from alias keys and remove them from the canonical query."""
+    """Read one boolean from alias keys and remove them from the canonical query.
+
+    Older v2rayN releases emitted both ``insecure`` and ``allowInsecure``; equal
+    values are accepted, contradictory ones are rejected.
+    """
     present = [key for key in keys if key in options]
-    if len(present) > 1:
-        raise FormatError("Repeated or conflicting query option.")
     if not present:
         return False
-    value = _boolean(options.pop(present[0]), "Certificate verification flag")
-    return value
+    values = [_boolean(options.pop(key), "Certificate verification flag") for key in present]
+    if any(value != values[0] for value in values):
+        raise FormatError("Repeated or conflicting query option.")
+    return values[0]
 
 
 def _alpn_list(value: str) -> list[str]:
@@ -833,7 +848,7 @@ def _parse_hysteria2(uri: str) -> dict:
     password = _text(_decode(auth, "Hysteria2 password"), "Hysteria2 password")
     options = _compact(_query(parts.query, _HYSTERIA2_OPTIONS))
     proxy = {"type": "hysteria2", "server": server, "port": port, "password": password}
-    if _flag(options, "insecure"):
+    if _flag(options, "insecure", "allowInsecure", "allow_insecure"):
         proxy["skip-cert-verify"] = True
         options["insecure"] = "1"
     if "sni" in options:
@@ -1092,10 +1107,13 @@ def _parse_ssr(uri: str) -> dict:
         raise FormatError("Unsupported SSR obfs.")
     password = _text(_b64_text(raw_password, "SSR password") if raw_password else "", "SSR password")
     extras = {}
-    for pair in filter(None, params.split("&")):
+    for position, pair in enumerate(filter(None, params.split("&")), 1):
         key, _, value = pair.partition("=")
-        if key not in {"obfsparam", "protoparam", "remarks", "group"} or key in extras:
-            raise FormatError("Unsupported query option; refusing lossy conversion.")
+        if key not in {"obfsparam", "protoparam", "remarks", "group"}:
+            raise FormatError(f"Unsupported query option (query parameter {position}); "
+                              "refusing lossy conversion.")
+        if key in extras:
+            raise FormatError("Repeated or conflicting query option.")
         extras[key] = _b64_text(value, "SSR option") if value else ""
     proxy = {"type": "ssr", "server": server, "port": port, "cipher": cipher,
              "password": password, "obfs": obfs, "protocol": protocol, "udp": True}

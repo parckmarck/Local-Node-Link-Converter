@@ -232,6 +232,13 @@ class UriValidationTests(unittest.TestCase):
                 with self.assertRaises(FormatError):
                     parse_uri(f"vless://{UUID}@example.com:443?{query}")
 
+    def test_matching_alias_collisions_are_accepted(self):
+        # Older v2rayN links spell the same flag twice with identical values.
+        node = parse_uri(f"vless://{UUID}@example.com:443?security=tls&insecure=1&allowInsecure=1")
+        self.assertTrue(node["clash"]["skip-cert-verify"])
+        self.assertEqual(parse_qs(urlsplit(node["uri"]).query)["allowInsecure"], ["1"])
+        self.assertEqual(parse_uri(node["uri"]), node)
+
     def test_query_limit_is_bounded(self):
         with self.assertRaises(FormatError):
             parse_uri(vless().partition("#")[0] + "?" + "&".join(["host=x"] * 65))
